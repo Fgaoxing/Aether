@@ -1,0 +1,152 @@
+#!/bin/bash
+# SPDX-License-Identifier: GPL-2.0-only
+# aether 救援镜像 — 本机驱动侦测 hook（键盘 / 有线网卡 / USB 主控）
+#
+# 语义（2026-11-15 定稿）：
+#   **只从 aether-keyboard / aether-usb / aether-network 原有的通用模块集里
+#     剪掉构建机不需要的**——不加入通用集之外的任何东西。
+#   唯二例外（有意的救援底线）：USB 有线网卡系列驱动恒保留，与本机侦测结果无关
+#   ——救援现场往往要靠 USB 网卡拿网络。
+#
+# 用法：HOOKS=(aether aether-microcode aether-hostdrv)
+#   替代 (aether aether-microcode aether-keyboard aether-usb aether-network)。
+#
+# 实现：
+#   1. 通用集 = 三个 hook 文件里 `add_module 'xxx'` 的并集（构建时从兄弟 hook 读取，
+#      hook 由 mkinitcpio source 执行，${BASH_SOURCE[0]} 指向本文件，dirname 即 install 目录；
+#      读不到兄弟 hook → 警告并退出，本 hook 不生效）。
+#   2. 本机侦测（modalias → /lib/modules/$(uname -r)/modules.alias 解析）：
+#        网卡      /sys/class/net/*/device（排除 lo 与无 device 符号链接的虚拟接口，
+#                无线网卡不匹配通用集、自然被剔除——本程序不支持 WiFi）
+#        USB 主控  PCI class 0x0c03xx（xHCI/EHCI/OHCI/UHCI/USB4 路由器）
+#        键盘      PS/2 serio（atkbd→serio_raw 等）+ USB HID（bInterfaceClass=03）
+#   3. 保留 = 通用集 ∩ 本机解析结果；再 ∪ USB 有线网卡恒保留清单。
+#      依赖模块由 mkinitcpio add_module 自动带入。
+#   4. 内建驱动（本机 xHCI 等 =y）解析不出模块 → 自然不加。
+#
+# 环境变量：AETHER_HOSTDIRV_DEBUG=1 打印侦测/剪枝决策。
+# 限制（同 mkinitcpio autodetect）：侦测的是**构建机**硬件，绝不可跨机器复制部署。
+
+build() {
+    local krn alias_file self_dir
+    krn="$(uname -r)"
+    alias_file="/lib/modules/${krn}/modules.alias"
+    self_dir="$(dirname "${BASH_SOURCE[0]:-aether-hostdrv}")"
+
+    if [[ ! -r "$alias_file" ]]; then
+        warning "aether-hostdrv: $alias_file 不可读，跳过侦测"
+        return 0
+    fi
+
+    # 解析 modalias → 命中的模块名（bash [[ == ]] glob 匹配；两侧格式一致）
+    aether_hostdrv_resolve() {
+        local modalias="$1" tag pat mod
+        while read -r tag pat mod rest; do
+            [[ "$tag" == alias ]] || continue
+            if [[ "$modalias" == $pat ]]; then
+                echo "$mod"
+            fi
+        done < "$alias_file"
+    }
+
+    # ── 通用集（三个 hook 文件里的 add_module 'xxx' 并集）──
+    local hookmods
+    hookmods="$(grep -hoE "add_module '[a-zA-Z0-9_.+-]+" \
+                    "$self_dir/aether-keyboard" "$self_dir/aether-usb" "$self_dir/aether-network" 2>/dev/null \
+                | sed -E "s/add_module '//" | sort -u)"
+    if [[ -z "$hookmods" ]]; then
+        warning "aether-hostdrv: 无法从兄弟 hook 读取模块清单（self_dir=$self_dir）——本 hook 不生效"
+        return 1
+    fi
+    declare -A CAND=()
+    local m
+    while IFS= read -r m; do
+        CAND[$m]=1
+    done <<< "$hookmods"
+
+    declare -A KEEP=()
+    local debug="${AETHER_HOSTDIRV_DEBUG:-0}"
+    keep_from_modalias() {
+        local modalias="$1" mod
+        for mod in $(aether_hostdrv_resolve "$modalias"); do
+            if [[ -n "${CAND[$mod]:-}" ]]; then
+                KEEP[$mod]=1
+                [[ "$debug" == 1 ]] && printf '  [hostdrv] 保留 %s（modalias %s）\n' "$mod" "$modalias"
+            else
+                [[ "$debug" == 1 ]] && printf '  [hostdrv] 剔除 %s（modalias %s，不在通用集）\n' "$mod" "$modalias"
+            fi
+        done
+    }
+
+    # ── 网卡（有线；无线不匹配通用集，自然剔除）──
+    local n
+    for n in /sys/class/net/*/; do
+        [[ -e "$n" ]] || continue
+        [[ "$(basename "$n")" == lo ]] && continue
+        [[ -e "${n}device" ]] || continue
+        local modalias
+        modalias=$(cat "${n}device/modalias" 2>/dev/null) || continue
+        keep_from_modalias "$modalias"
+    done
+
+    # ── USB 主控（PCI class 0x0c03xx：xHCI/EHCI/OHCI/UHCI/USB4 路由器）──
+    local d cls
+    for d in /sys/bus/pci/devices/*/; do
+        [[ -e "$d" ]] || continue
+        cls=$(cat "${d}class" 2>/dev/null) || continue
+        case "$cls" in
+            0x0c03*) ;;
+            *) continue ;;
+        esac
+        local modalias
+        modalias=$(cat "${d}modalias" 2>/dev/null) || continue
+        keep_from_modalias "$modalias"
+    done
+
+    # ── 键盘：PS/2 serio ──
+    for d in /sys/bus/serio/devices/*/; do
+        [[ -e "$d" ]] || continue
+        local modalias
+        modalias=$(cat "${d}modalias" 2>/dev/null) || continue
+        keep_from_modalias "$modalias"
+    done
+    # ── 键盘：USB HID（bInterfaceClass=03）──
+    for d in /sys/bus/usb/devices/*:*/; do
+        [[ -e "$d" ]] || continue
+        local icls modalias
+        icls=$(cat "${d}bInterfaceClass" 2>/dev/null) || continue
+        [[ "$icls" == "03" ]] || continue
+        modalias=$(cat "${d}modalias" 2>/dev/null) || continue
+        keep_from_modalias "$modalias"
+    done
+
+    # ── USB 有线网卡（有意恒保留；救援的最后联网手段；全部有线，无一无线）──
+    local usb_wired_nics="usbnet cdc_ether cdc_eem cdc_ncm cdc_subset rndis_host
+        asix ax88179_178a aqc111 dm9601 mcs7830 lan78xx smsc75xx smsc95xx
+        r8152 r8153_ecm rtl8150 pegasus net1080 zaurus kaweth ch9200 gl620a
+        catc sr9700 sr9800 plusb int51x1"
+    for m in $usb_wired_nics; do KEEP[$m]=1; done
+
+    local total=0 list=()
+    for m in $(printf '%s\n' "${!KEEP[@]}" | sort); do
+        add_module "${m}?"
+        list+=("$m")
+        total=$((total + 1))
+    done
+    quiet "aether-hostdrv: 通用集 $(echo "$hookmods" | wc -l) 个 → 保留 ${total} 个：${list[*]}"
+    return 0
+}
+
+help() {
+    cat <<HELPEOF
+aether rescue image — host driver-detect hook (keyboard / NIC / USB)
+
+Prunes the common module sets of aether-keyboard + aether-usb + aether-network
+down to what THIS build host needs (intersection by modalias resolution), plus
+an always-kept list of USB wired NIC drivers. Wireless is not supported at all
+(use the full aether-keyboard/aether-usb/aether-network hooks otherwise).
+This is a BUILD-TIME detection — do NOT deploy the image on other hardware.
+HELPEOF
+}
+
+# vim: set ft=sh ts=4 sw=4 et:

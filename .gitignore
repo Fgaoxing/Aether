@@ -1,0 +1,9 @@
+build*/
+*.o
+*.a
+*.swp
+.DS_Store
+initramfs/aether-rescue.img
+initramfs/aether-rescue.cpio
+initramfs/rescue-*.img
+initramfs/aether-rescue-*.img

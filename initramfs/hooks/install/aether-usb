@@ -1,0 +1,38 @@
+#!/bin/bash
+# aether 救援镜像 USB/HID 支持 hook。
+# 目的：让 rescue 模式能识别 USB 输入设备（USB 键盘/鼠标）。
+# Arch 内核：xHCI/EHCI 主控制器、USB HID、usbhid 都是 builtin（见 /proc/config.gz），
+# 所以本 hook 在 Arch 上几乎全是 no-op；它存在的意义是给把这些编成模块的内核兜底。
+# USB 闪存盘（uas/usb-storage）不在此 hook 职责范围（救援场景以 rescue 内置 zcat 解包模块为主）。
+# 用法: HOOKS=(aether aether-usb)
+
+build() {
+    # USB 3.x 主控制器（xHCI）
+    add_module 'xhci-hcd?'
+    add_module 'xhci-pci?'
+    # USB 2.0 主控制器（EHCI）
+    add_module 'ehci-hcd?'
+    add_module 'ehci-pci?'
+    # USB 1.x 主控制器（OHCI/UHCI）—— 老机器可能有
+    add_module 'ohci-hcd?'
+    add_module 'ohci-pci?'
+    add_module 'uhci-hcd?'
+    # USB HID 设备类（键盘/鼠标）
+    add_module 'usbhid?'
+    add_module 'hid-generic?'
+    # USB 通用核心（依赖）
+    add_module 'usbcore?'
+    add_module 'usb-common?'
+}
+
+help() {
+    cat <<HELPEOF
+aether rescue image — USB/HID hook
+Provides USB host controller + HID modules so the rescue shell can read
+USB keyboards/mice and other USB-HID input devices. Most modern kernels
+build these in (Arch benefits from this); this hook is a portable fallback.
+The rescue shell always works with /dev/ttyS0 serial console regardless.
+HELPEOF
+}
+
+# vim: set ft=sh ts=4 sw=4 et:

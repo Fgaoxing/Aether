@@ -1,0 +1,217 @@
+#!/bin/bash
+# SPDX-License-Identifier: GPL-2.0-only
+# aether 救援镜像 — CPU 微码删减 hook
+#
+# 选择：保留
+#   1) "基础微码"：每个 (family, model) 最新（最高 rev）的记录 —— intel-ucode.img
+#      222 条 → 18 条，14.6 MB → ≈4.2 MiB；所有 i5/i7、Atom、Xeon 世系都有一份
+#      可以加载的最新修正（典型共有基线）；
+#   2) "本机微码"：与本机 CPU family+model 完全匹配的**全部 rev**（含旧 rev，
+#      以保证用户使用较老微码环境也能应报前台）。
+#
+# 环境变量：
+#   AETHER_MICROCODE_KEEP_ALL=1   不删减，把整包 ucode.img 装进 image（生产用/对比用）
+#   AETHER_MICROCODE_LOCAL_ONLY=1 只留本机 family+model 匹配的微码，不加基础集合
+#   AETHER_MICROCODE_DEBUG=1      打印每条保留/跳过的微码记录
+#   AETHER_MICROCODE_CPUINFO=...  指定模拟 CPU 信息文件（测试用）
+#
+# 剥离策略：
+#   "基础 + 本机"是推荐默认（image ≈4.5 MiB；本机本就是 0 条匹配，故全部来自基础集）。
+#   若坚持最轻量化：AETHER_MICROCODE_LOCAL_ONLY=1（≈330 KiB，本机无匹配=无 early file）。
+#
+# 使用：HOOKS=(aether aether-microcode)
+#         AETHER_MICROCODE_DEBUG=1 mkinitcpio -c /tmp/... -g ... -n
+#
+# 注意：仅 x86 有效；ARM/RISC-V 上不跑 ucode。
+
+build() {
+    local arch vendor family model stepping
+    arch="$(uname -m)"
+    if [[ "$arch" != @(i?86|x86_64) ]]; then
+        warning "aether-microcode: 架构 '%s' 不支持，跳过" "$arch"
+        return
+    fi
+
+    # 测试用：可用环境变量 AETHER_MICROCODE_CPUINFO 自指定 cpuinfo 路径
+    local cpuinfo="${AETHER_MICROCODE_CPUINFO:-/proc/cpuinfo}"
+    vendor="$(awk -F: '/^vendor_id/ {sub(/^[ \t]+/, "", $2); print $2; exit}' "$cpuinfo" 2>/dev/null)"
+    if [[ -z "$vendor" ]]; then
+        warning "aether-microcode: 无法从 %s 读出 vendor_id，跳过" "$cpuinfo"
+        return
+    fi
+
+    family="$(awk -F: '/^cpu family/ {sub(/^[ \t]+/, "", $2); print $2; exit}' "$cpuinfo")"
+    model="$(awk  -F: '/^model[ \t]*:/ {sub(/^[ \t]+/, "", $2); print $2; exit}'  "$cpuinfo")"
+    stepping="$(awk -F: '/^stepping[ \t]*:/ {sub(/^[ \t]+/, "", $2); print $2; exit}' "$cpuinfo")"
+    [[ -z "$family" || -z "$model" ]] && {
+        warning "aether-microcode: 读不出 family/model，跳过"
+        return
+    }
+
+    case "$vendor" in
+        GenuineIntel) vendor=intel; ucode_img='intel-ucode.img';;
+        AuthenticAMD) vendor=amd;   ucode_img='amd-ucode.img'  ;;
+        *)           warning "aether-microcode: 未知 CPU 厂商 '%s'，跳过" "$vendor"; return;;
+    esac
+
+    # ---- 1) 如果有 /usr/lib/firmware/{intel,amd}-ucode/ 拆散文件：直接按主机 CPU 匹配挑出 ---
+    if [[ -d "/usr/lib/firmware/${vendor}-ucode" ]]; then
+        aether_microcode_from_firmware "$vendor" "$family" "$model" "$stepping" && return
+    fi
+
+    # ---- 2) 仅有 /boot/*-ucode.img：解析容器，删减后装入 early file ---
+    if [[ -r "/boot/${ucode_img}" ]]; then
+        aether_microcode_from_img "/boot/${ucode_img}" "$vendor" "$family" "$model" "$stepping" && return
+    fi
+
+    warning "aether-microcode: 本机没有可用微码（firmware 目录及 /boot/${ucode_img} 都不存在）"
+}
+
+help() {
+    cat <<HELPEOF
+aether rescue image — CPU microcode pruning hook
+只为本机 CPU 挑出对应的 microcode 片段（CPUID 匹配 family+model），
+其他平台的 microcode 一律丢掉——image 不再包含与救援机器无关的微码。
+HELPEOF
+}
+
+# ---- 从 /usr/lib/firmware/${vendor}-ucode/ 中挑出精确匹配微码组合，仅新进 early file
+aether_microcode_from_firmware() {
+    local vendor="$1" family="$2" model="$3" stepping="$4"
+    local fw_dir="/usr/lib/firmware/${vendor}-ucode"
+    local -a candidates=()
+
+    if [[ "$vendor" == intel ]]; then
+        local name
+        name="$(printf '%02x-%02x-%02x' "$family" "$model" "$stepping")"
+        mapfile -t candidates < <(LC_ALL=C.UTF-8 find "$fw_dir" -maxdepth 1 -name "${name}" -o -name "${name}.bin" 2>/dev/null)
+
+        if (( ${#candidates[@]} == 0 )) && [[ "${AETHER_MICROCODE_KEEP_ALL:-}" != 1 ]]; then
+            # 任何一个 INTEL 段匹配不到 ⇒整个 Intel 微码在本机都没用，直接不加
+            warning "aether-microcode: 本机 CPU (family=$family model=$model stepping=$stepping) 在 $fw_dir 中没有匹配微码"
+            return 0
+        fi
+    else
+        local fam_name="$(printf 'fam%xh' "$family")"
+        mapfile -t candidates < <(LC_ALL=C.UTF-8 find "$fw_dir" -maxdepth 1 -name 'microcode_amd*.bin' 2>/dev/null)
+        if (( ${#candidates[@]} == 0 )); then
+            warning "aether-microcode: $fw_dir 为空，跳过"
+            return 0
+        fi
+    fi
+
+    local out
+    out="$(mktemp)"
+    cat "${candidates[@]}" > "$out" || { rm -f "$out"; return 1; }
+
+    local size; size="$(stat -c%s "$out" 2>/dev/null || stat -f%z "$out")"
+    local dest
+    if [[ "$vendor" == intel ]]; then dest='GenuineIntel.bin'; else dest='AuthenticAMD.bin'; fi
+    quiet "adding microcode file(s): '${firmware_dir:-$fw_dir}/${candidates[*]}' ($size bytes)"
+    add_file_early "$out" "/kernel/x86/microcode/$dest" 644
+    rm -f "$out"
+    return 0
+}
+
+# 从 /boot/*-ucode.img 提取 microcode 容器并裁减
+aether_microcode_from_img() {
+    local img="$1" vendor="$2" family="$3" model="$4" stepping="$5"
+    local early="/kernel/x86/microcode/GenuineIntel.bin"
+    [[ "$vendor" == amd ]] && early="/kernel/x86/microcode/AuthenticAMD.bin"
+
+    local tmp_hdr tmp_out tmp_bin; tmp_bin="$(mktemp)"; tmp_out="$(mktemp)"
+    if ! LC_ALL=C.UTF-8 bsdtar -xOf "$img" "kernel/x86/microcode/GenuineIntel.bin" > "$tmp_bin" 2>/dev/null \
+       && ! LC_ALL=C.UTF-8 bsdtar -xOf "$img" "kernel/x86/microcode/AuthenticAMD.bin" > "$tmp_bin" 2>/dev/null; then
+        rm -f "$tmp_bin" "$tmp_out"; return 0
+    fi
+
+    if [[ ! -s "$tmp_bin" ]]; then
+        warning "aether-microcode: $img 中没有 early file"
+        rm -f "$tmp_bin" "$tmp_out"; return 0
+    fi
+
+    python3 - "$tmp_bin" "$tmp_out" "$vendor" "$family" "$model" <<'PY' || { rm -f "$tmp_bin" "$tmp_out"; return 0; }
+import struct, sys, os
+
+inp, outp, vendor, fam_s, mod_s = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5]
+try:
+    fam, mod = int(fam_s, 0), int(mod_s, 0)
+except ValueError:
+    fam, mod = int(fam_s, 10), int(mod_s, 10)
+
+debug    = os.environ.get('AETHER_MICROCODE_DEBUG', '0') == '1'
+keep_all = os.environ.get('AETHER_MICROCODE_KEEP_ALL', '0') == '1'
+local_only = os.environ.get('AETHER_MICROCODE_LOCAL_ONLY', '0') == '1'
+
+data = open(inp, 'rb').read()
+
+if vendor != 'intel':
+    # best-effort for AMD: keep everything
+    with open(outp, 'wb') as f:
+        f.write(data)
+    print(f"amd ucode not trimmed (kept full file)", file=sys.stderr)
+    sys.exit(0)
+
+records = []
+pos = 0
+while pos < len(data):
+    hdr = data[pos:pos+48]
+    if len(hdr) < 48:
+        break
+    hdrver, rev, date, sig, cksum, ldrver, pf, dsz, tsz, msz, mreq, res = struct.unpack_from('<12I', hdr, 0)
+    if hdrver != 1:
+        break
+    sz = tsz if (tsz and 2048 <= tsz <= len(data) - pos and tsz % 4 == 0) else 2048
+    f = ((sig >> 8) & 0xf) | ((sig >> 20) & 0xff0)
+    m = ((sig >> 4) & 0xf) | ((sig >> 16) & 0xf0)
+    records.append((pos, sz, rev, f, m))
+    pos += sz
+
+# 策略
+#   keep_all: 全部装
+#   local_only: 仅装本机
+#   默认: 基础集合（每个 (fam, model) 保留最新 rev）+ 本机所有匹配记录
+if keep_all:
+    selected = set(range(len(records)))
+    desc = 'all'
+elif local_only:
+    selected = {i for i, (_, _, _, f, m) in enumerate(records) if f == fam and m == mod}
+    desc = 'local-only'
+else:
+    # base = 每个 (fam, model) 的最新 rev
+    best = {}
+    for i, (_, _, rev, f, m) in enumerate(records):
+        k = (f, m)
+        if k not in best or rev > best[k][1]:
+            best[k] = (i, rev)
+    base = {idx for idx, _ in best.values()}
+    # local = 本机 fam+model 全部档（无论 rev）
+    local = {i for i, (_, _, _, f, m) in enumerate(records) if f == fam and m == mod}
+    selected = base | local
+    desc = 'base+local'
+
+out = bytearray()
+kb_bytes = 0
+for i, (off, sz, rev, f, m) in enumerate(records):
+    if i in selected:
+        out += data[off:off+sz]
+        kb_bytes += sz
+        if debug:
+            print(f"  keep record i={i} off=0x{off:06x} rev={rev} fam={f} mod={m:#x} size={sz}", file=sys.stderr)
+
+print(f"ucode trim ({desc}): {len(selected)} of {len(records)} records, {kb_bytes} bytes", file=sys.stderr)
+with open(outp, 'wb') as f:
+    f.write(out)
+PY
+
+    if [[ ! -s "$tmp_out" ]]; then
+        warning "aether-microcode: 本机 (family=$family model=$model) 在 /boot/$ucode_img 中没有匹配微码"
+        rm -f "$tmp_bin" "$tmp_out"; return 0
+    fi
+
+    local size; size="$(stat -c%s "$tmp_out" 2>/dev/null || stat -f%z "$tmp_out")"
+    quiet "adding trimmed microcode file ($size bytes)"
+    add_file_early "$tmp_out" "$early" 644
+    rm -f "$tmp_bin" "$tmp_out"
+    return 0
+}

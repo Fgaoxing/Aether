@@ -1,0 +1,61 @@
+#!/bin/bash
+# aether 救援镜像 NIC 支持 hook。
+# 目的：rescue 模式启动后能用 udhcpc/netup/telnetd 走出一个可用的远程救援通道。
+# Arch 内核网卡驱动全部 =m（e1000e/igb/ixgbe/r8169/virtio_net/vmxnet3/bnxt_en 全是模块），
+# 不在镜像里打包这些模块的话 netup find-first-nonlo 什么都找不到。
+# 本 hook 覆盖最常见的救援硬件 + 虚拟机 NIC；可选空动态的最后一项 auto 则依赖 qemu 宿主 netdev。
+# 用法: HOOKS=(aether aether-network)
+# 静态 IP / 多网卡场景：在 rescue shell 内
+#   ifconfig eth0 10.0.0.5/24 && udhcpc eth0 && netup
+# 或者直接 telnet 连过去（救援通道默认端口 23 起 telnetd）。
+
+# 当设置了 AETHER_NETWORK_DRIVERS 时仅打包指定驱动（空格分隔），方便做小镜像：
+#   AETHER_NETWORK_DRIVERS="virtio_net e1000e r8169" mkinitcpio -c ...
+# 否则打包全集（32+ 个 NIC 驱动）。
+
+build() {
+    if [[ -n "${AETHER_NETWORK_DRIVERS:-}" ]]; then
+        # 小镜像模式：仅打包用户指定的 NIC 驱动
+        local _nics=()
+        read -ra _nics <<<"${AETHER_NETWORK_DRIVERS}"
+        for m in "${_nics[@]}"; do
+            add_module "$m" || true
+        done
+        return 0
+    fi
+
+    # Intel 有线 NIC —— 桌面/笔记本/服务器最常见
+    add_module 'e1000e'      # Intel 82574/82566/82579 GI/GbE（QEMU -device e1000e）
+    add_module 'e1000'       # Intel 82540/82545/82547/82573/82578（QEMU -device e1000）
+    add_module 'igb'         # Intel PRO/1000 GbE
+    add_module 'ixgbe'       # Intel 10GbE（服务器）
+    add_module 'i40e'        # Intel 1/10/100GbE（服务器）
+    # Realtek
+    add_module 'r8169'       # Realtek RTL8169/8168/8101/8111 GbE
+    # Broadcom
+    add_module 'bnxt_en'     # Broadcom NetXtreme/BCM57414/57500（50GbE+）
+    add_module 'bnx2'        # Broadcom NetXtreme II（老一代）
+    add_module 'bnx2x'       # Broadcom NetXtreme II 10GbE
+    # 虚拟环境（KVM/QEMU/VMware/Hyper-V/云主机）
+    add_module 'virtio_net'  # virtio-net（QEMU/KVM）
+    add_module 'vmxnet3'     # VMware 高级 NIC
+    add_module 'hv_netvsc'   # Hyper-V 合成 NIC
+    # 依赖库
+    add_module 'mii'         # rtl8169 以及其它依赖 MII 总线的 PHY
+    add_module 'mdio'        # MDIO PHY 控制器（部分驱动需要）
+    add_module 'libphy'      # 通用 PHY 层
+}
+
+help() {
+    cat <<HELPEOF
+aether rescue image — network hook
+提供 Intel/Realtek/Broadcom + virtio/vmxnet3/Hyper-V 的 NIC 驱动模块，
+让 rescue 模式可以用 udhcpc/ifconfig/netup 配置有线网络，拿到 IP/DHCP 后
+即可用 ifconfig/udhcpc 或 telnetd 走进远程救援通道（默认开 telnetd :23，无认证）。
+静态 IP 场景：直接在 rescue shell 里 'ifconfig eth0 x.y.z.w/prefix'；
+DHCP 场景：'udhcpc eth0' 或者直接 'netup'（自动找第一个非 lo 网卡）。
+救援 shell 本身不依赖此 hook；/dev/ttyS0 串口控制台始终可用。
+HELPEOF
+}
+
+# vim: set ft=sh ts=4 sw=4 et:

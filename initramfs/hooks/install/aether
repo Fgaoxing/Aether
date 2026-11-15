@@ -1,0 +1,27 @@
+#!/bin/bash
+# aether 救援镜像的 mkinitcpio install hook
+# 把 build-nolibc/aether 放成镜像的 /init（PID 1），不依赖 busybox/udev/glibc。
+build() {
+    local repo
+    repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+    if [[ ! -x "${repo}/build-nolibc/aether" ]]; then
+        error "aether 二进制不存在: %s（先 cmake -S . -B build-nolibc -DUSE_HOST_LIBC=OFF && cmake --build build-nolibc）" "${repo}/build-nolibc/aether"
+        return 1
+    fi
+    # /init 就是 aether（PID 1 → aether_init_main）
+    add_file "${repo}/build-nolibc/aether" /init 0755
+    # pivot_root 挂载点（内核挂 proc/sys/dev 到新根时目标必须存在）
+    add_dir /newroot 0755
+    # 引用配置里 MODULES=(nvme ...)；mkinitcpio 自动带上依赖（nvme-core/nvme-auth/nvme-keyring）
+    add_module nvme
+}
+
+help() {
+    cat <<HELPEOF
+An aether-powered rescue initramfs.
+All system interaction (proc/sys/devtmpfs mount, module load, uevent,
+root= resolution, pivot_root, execve) is handled by aether itself.
+HELPEOF
+}
+
+# vim: set ft=sh ts=4 sw=4 et:
