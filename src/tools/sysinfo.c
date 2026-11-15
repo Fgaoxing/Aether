@@ -132,10 +132,10 @@ int tool_lspci(int argc, char **argv, char **envp)
     if (argc > 1) { elog_err("lspci: usage: lspci"); return 2; }
     lspci_ctx_t ctx = { 0 };
     if (aether_foreach_dirent("/sys/bus/pci/devices", lspci_cb, &ctx) != 0) {
-        elog_err("lspci: 无法枚举 /sys/bus/pci/devices（/sys 未挂载？试试 mount -t sysfs sysfs /sys）");
+        elog_err("lspci: cannot enumerate /sys/bus/pci/devices (/sys not mounted? try mount -t sysfs sysfs /sys)");
         return 1;
     }
-    if (ctx.count == 0) elog_info("lspci: 未发现 PCI 设备（或 /sys 未挂载）");
+    if (ctx.count == 0) elog_info("lspci: no PCI devices found (or /sys not mounted)");
     return 0;
 }
 
@@ -169,10 +169,10 @@ int tool_lsusb(int argc, char **argv, char **envp)
     if (argc > 1) { elog_err("lsusb: usage: lsusb"); return 2; }
     lsusb_ctx_t ctx = { 0 };
     if (aether_foreach_dirent("/sys/bus/usb/devices", lsusb_cb, &ctx) != 0) {
-        elog_err("lsusb: 无法枚举 /sys/bus/usb/devices（/sys 未挂载？）");
+        elog_err("lsusb: cannot enumerate /sys/bus/usb/devices (/sys not mounted?)");
         return 1;
     }
-    if (ctx.count == 0) elog_info("lsusb: 未发现 USB 设备（或 /sys 未挂载）");
+    if (ctx.count == 0) elog_info("lsusb: no USB devices found (or /sys not mounted)");
     return 0;
 }
 
@@ -234,10 +234,10 @@ int tool_scsi(int argc, char **argv, char **envp)
     if (argc > 1) { elog_err("scsi: usage: scsi"); return 2; }
     scsi_ctx_t ctx = { 0 };
     if (aether_foreach_dirent("/sys/bus/scsi/devices", scsi_cb, &ctx) != 0) {
-        elog_err("scsi: 无法枚举 /sys/bus/scsi/devices（/sys 未挂载？）");
+        elog_err("scsi: cannot enumerate /sys/bus/scsi/devices (/sys not mounted?)");
         return 1;
     }
-    if (ctx.count == 0) elog_info("scsi: 未发现 SCSI 设备（或 /sys 未挂载）");
+    if (ctx.count == 0) elog_info("scsi: no SCSI devices found (or /sys not mounted)");
     return 0;
 }
 
@@ -277,16 +277,16 @@ int tool_serial(int argc, char **argv, char **envp)
             if (ls[0] && ls[0] != '\0') elog_info("  %s", ls);
         }
     } else {
-        elog_info("serial: /proc/tty/driver/serial 不可读（/proc 未挂载或无串口控制器）");
+        elog_info("serial: /proc/tty/driver/serial unreadable (/proc not mounted or no serial controller)");
     }
 
     /* 2) 枚举 /sys/class/tty 列出串口设备节点 */
     elog_info("serial tty devices (/sys/class/tty):");
     serial_ctx_t ctx = { 0 };
     if (aether_foreach_dirent("/sys/class/tty", serial_tty_cb, &ctx) != 0)
-        elog_info("  (无法枚举 /sys/class/tty)");
+        elog_info("  (cannot enumerate /sys/class/tty)");
     else if (ctx.count == 0)
-        elog_info("  (无串口类 tty 设备)");
+        elog_info("  (no serial-class tty devices)");
     return 0;
 }
 
@@ -341,31 +341,31 @@ int tool_raidautorun(int argc, char **argv, char **envp)
             for (int i = 1; i < argc; i++) {
                 char *cmd[] = { (char *)"mdadm", (char *)"--incremental", (char *)"--run", argv[i], 0 };
                 int rc = run_external(4, cmd, envp);
-                if (rc == 0) { elog_info("raidautorun: %s 已尝试启动（详见上方输出）", argv[i]); ok++; }
-                else { elog_err("raidautorun: mdadm --incremental --run %s 失败（rc=%d）", argv[i], rc); bad++; }
+                if (rc == 0) { elog_info("raidautorun: %s attempted to start (see output above)", argv[i]); ok++; }
+                else { elog_err("raidautorun: mdadm --incremental --run %s failed (rc=%d)", argv[i], rc); bad++; }
             }
             return ok > 0 && bad == 0 ? 0 : 1;
         }
-        elog_info("raidautorun: 尝试 mdadm --assemble --scan ...");
+        elog_info("raidautorun: trying mdadm --assemble --scan ...");
         char *cmd[] = { (char *)"mdadm", (char *)"--assemble", (char *)"--scan", 0 };
         int rc = run_external(3, cmd, envp);
         if (rc == 0) return 0;
-        elog_err("raidautorun: mdadm --assemble --scan 失败（rc=%d）", rc);
+        elog_err("raidautorun: mdadm --assemble --scan failed (rc=%d)", rc);
         return 1;
     }
 
-    elog_info("raidautorun: 未找到 mdadm；尝试内核 RAID_AUTORUN ioctl（现代内核不再支持）");
+    elog_info("raidautorun: mdadm not found; trying kernel RAID_AUTORUN ioctl (unsupported on modern kernels)");
 
     /* 2) 传统回退：RAID_AUTORUN ioctl。现代内核里 md_ioctl_valid 无此 case → ENOTTY */
     int ok = 0, bad = 0;
     if (argc > 1) {
         for (int i = 1; i < argc; i++) {
             long fd = sys_open(argv[i], O_RDONLY | O_NONBLOCK, 0);
-            if (AETHER_IS_ERR(fd)) { elog_err("raidautorun: 无法打开 %s（%d）", argv[i], AETHER_ERR_CODE(fd)); bad++; continue; }
+            if (AETHER_IS_ERR(fd)) { elog_err("raidautorun: cannot open %s (%d)", argv[i], AETHER_ERR_CODE(fd)); bad++; continue; }
             long r = sys_ioctl((int)fd, RAID_AUTORUN_NR, 0);
             sys_close((int)fd);
-            if (AETHER_IS_ERR(r)) { elog_err("raidautorun: RAID_AUTORUN %s 失败（%d）", argv[i], AETHER_ERR_CODE(r)); bad++; }
-            else { elog_info("raidautorun: RAID_AUTORUN %s 成功", argv[i]); ok++; }
+            if (AETHER_IS_ERR(r)) { elog_err("raidautorun: RAID_AUTORUN %s failed (%d)", argv[i], AETHER_ERR_CODE(r)); bad++; }
+            else { elog_info("raidautorun: RAID_AUTORUN %s succeeded", argv[i]); ok++; }
         }
     } else {
         /* 扫描 /proc/partitions，对整盘与分区逐个尝试 */
@@ -404,11 +404,11 @@ int tool_raidautorun(int argc, char **argv, char **envp)
                 if (AETHER_IS_ERR(fd)) { bad++; continue; }
                 long r = sys_ioctl((int)fd, RAID_AUTORUN_NR, 0);
                 sys_close((int)fd);
-                if (!AETHER_IS_ERR(r)) { elog_info("raidautorun: RAID_AUTORUN %s 成功", dev); ok++; }
+                if (!AETHER_IS_ERR(r)) { elog_info("raidautorun: RAID_AUTORUN %s succeeded", dev); ok++; }
                 else bad++;
             }
         } else {
-            elog_err("raidautorun: 无法读取 /proc/partitions；且未找到 mdadm");
+            elog_err("raidautorun: cannot read /proc/partitions; and mdadm not found");
             return 2;
         }
     }
@@ -427,11 +427,11 @@ int tool_raidautorun(int argc, char **argv, char **envp)
                 if (ls[0]) elog_info("%s", ls);
             }
         } else {
-            elog_info("raidautorun: /proc/mdstat 不存在（md 模块未加载；需要 modprobe md_mod 或 root）");
+            elog_info("raidautorun: /proc/mdstat missing (md module not loaded; need modprobe md_mod or root)");
         }
     }
     if (ok == 0 && bad > 0) {
-        elog_err("raidautorun: 全部尝试失败；内核不支持 RAID_AUTORUN 时请使用 mdadm --assemble --scan / --incremental --run <dev>");
+        elog_err("raidautorun: all attempts failed; if kernel does not support RAID_AUTORUN, use mdadm --assemble --scan / --incremental --run <dev>");
         return 1;
     }
     return 0;
@@ -463,12 +463,12 @@ int tool_kbd_mode(int argc, char **argv, char **envp)
 {
     (void)envp;
     int kbd = aether_tty_open_rw();
-    if (kbd < 0) { elog_err("kbd_mode: 无法打开控制台 tty"); return 1; }
+    if (kbd < 0) { elog_err("kbd_mode: cannot open console tty"); return 1; }
 
     if (argc == 1) {
         int mode = -1;
         long r = sys_ioctl(kbd, KDGKBMODE, (unsigned long)&mode);
-        if (AETHER_IS_ERR(r)) { elog_err("kbd_mode: KDGKBMODE 失败（%d）（需要控制台，且内核支持）", AETHER_ERR_CODE(r)); if (kbd > 2) sys_close(kbd); return 1; }
+        if (AETHER_IS_ERR(r)) { elog_err("kbd_mode: KDGKBMODE failed (%d) (needs console, kernel support)", AETHER_ERR_CODE(r)); if (kbd > 2) sys_close(kbd); return 1; }
         elog_info("kbd_mode: %s", kbd_mode_name(mode));
         if (kbd > 2) sys_close(kbd);
         return 0;
@@ -481,15 +481,15 @@ int tool_kbd_mode(int argc, char **argv, char **envp)
     else if (aether_streq(req, "-a") || aether_streq(req, "ascii") || aether_streq(req, "xlate")) mode = K_XLATE;
     else if (aether_streq(req, "-u") || aether_streq(req, "unicode")) mode = K_UNICODE;
     else if (aether_streq(req, "-o") || aether_streq(req, "off")) mode = K_OFF;
-    else { elog_err("kbd_mode: 未知模式 '%s'（用：-s/-k/-a/-u/-o 或 scancode/keycode/xlate/unicode/off；不带参数=查询）", req); if (kbd > 2) sys_close(kbd); return 2; }
+    else { elog_err("kbd_mode: unknown mode '%s' (use: -s/-k/-a/-u/-o or scancode/keycode/xlate/unicode/off; no args = query)", req); if (kbd > 2) sys_close(kbd); return 2; }
 
     long r = sys_ioctl(kbd, KDSKBMODE, (unsigned long)&mode);
     if (AETHER_IS_ERR(r)) {
-        elog_err("kbd_mode: KDSKBMODE 设置失败（%d）（需要相应权限/控制台）", AETHER_ERR_CODE(r));
+        elog_err("kbd_mode: KDSKBMODE set failed (%d) (needs permission/console)", AETHER_ERR_CODE(r));
         if (kbd > 2) sys_close(kbd);
         return 1;
     }
-    elog_info("kbd_mode: 已切换到 %s", kbd_mode_name(mode));
+    elog_info("kbd_mode: switched to %s", kbd_mode_name(mode));
     if (kbd > 2) sys_close(kbd);
     return 0;
 }

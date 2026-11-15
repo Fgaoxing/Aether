@@ -81,6 +81,7 @@
 /* i386 int 0x80 下 __NR_mmap(90) 走内存传参，寄存器传参一律改用 __NR_mmap2(192)：offset 以 4K 页为单位 */
 #define __NR_mmap2           192
 /* i386 无 __NR_newfstatat：32 位内核表位 300 即 fstatat64（unistd_32.h 暴露为 __NR_fstatat64），语义等同 32 位 newfstatat */
+#define __NR_setsid         66
 #define __NR_newfstatat 300
 
 #endif /* AETHER_SYSNUM_I386_H */

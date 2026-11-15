@@ -66,7 +66,7 @@ int tool_lsblk(int argc, char **argv, char **envp)
     char buf[8192];
     size_t len = 0;
     if (aether_read_file("/proc/partitions", buf, sizeof(buf) - 1, &len) != 0) {
-        elog_err("lsblk: 无法读取 /proc/partitions（/proc 未挂载？试试 mount -t proc proc /proc）");
+        elog_err("lsblk: cannot read /proc/partitions (/proc not mounted? try mount -t proc proc /proc)");
         return 1;
     }
     buf[len] = '\0';
@@ -285,20 +285,20 @@ int tool_lsblk(int argc, char **argv, char **envp)
     /* efivarfs 状态（disks 原功能） */
     char dir[128];
     if (aether_efivars_dir(dir, sizeof(dir)) != 0) {
-        elog_info("efivars: 未发现 UEFI 变量文件系统（非 UEFI 或 /sys/firmware/efi 缺失）");
+        elog_info("efivars: no UEFI variable filesystem found (not UEFI or /sys/firmware/efi missing)");
         return 0;
     }
     int mounted = aether_is_mounted(dir, "efivarfs");
     int mnt_rw = 0;
     if (mounted == 1) aether_mount_info(dir, "efivarfs", &mnt_rw);
     if (mounted != 1) {
-        elog_info("efivars: 已发现 %s 但未挂载（挂载：mount -t efivarfs efivarfs %s）", dir, dir);
+        elog_info("efivars: found %s but not mounted (mount: mount -t efivarfs efivarfs %s)", dir, dir);
     } else if (aether_efivars_writable()) {
-        elog_info("efivars: %s 已挂载 (rw，可写)", dir);
+        elog_info("efivars: %s mounted (rw, writable)", dir);
     } else if (mnt_rw) {
-        elog_info("efivars: %s 已挂载 (rw，但当前用户无写权限；需要 root)", dir);
+        elog_info("efivars: %s mounted (rw, but no write permission for current user; need root)", dir);
     } else {
-        elog_info("efivars: %s 已挂载 (ro)；写操作需：mount -o remount,rw efivarfs", dir);
+        elog_info("efivars: %s mounted (ro); to write: mount -o remount,rw efivarfs", dir);
     }
     unsigned short bo[64];
     int nb = 0;
@@ -320,7 +320,7 @@ int tool_lsblk(int argc, char **argv, char **envp)
         }
         elog_info("BootOrder: %s", order);
     } else {
-        elog_info("BootOrder: 未设置或不可读（非 UEFI 启动项？）");
+        elog_info("BootOrder: not set or unreadable (not an UEFI boot entry?)");
     }
     return 0;
 }

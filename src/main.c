@@ -56,7 +56,7 @@ int main(int argc, char **argv, char **envp)
             const char *sub = argv[1];
             int rc = aether_applet_run(sub, argc - 1, argv + 1, envp);
             if (rc >= 0) return rc;
-            elog_err("aether: unknown applet '%s'（`aether help` 查看列表）", sub);
+            elog_err("aether: unknown applet '%s' (try `aether help`)", sub);
             return EXIT_NOTIMPL;
         }
         return shell_main(argc, argv, envp);
@@ -68,6 +68,6 @@ int main(int argc, char **argv, char **envp)
         if (r >= 0) return r;
     }
 
-    elog_err("aether: unknown applet '%s'（`aether help` 查看列表）", name);
+    elog_err("aether: unknown applet '%s' (try `aether help`)", name);
     return EXIT_NOTIMPL;
 }

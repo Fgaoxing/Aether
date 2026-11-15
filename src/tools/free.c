@@ -1,5 +1,5 @@
 /*
- * free.c — 内存状态（§12.5）
+ * free.c — memory status（§12.5）
  * 读 /proc/meminfo，打印 Mem/Swap 总量与可用量（KiB）。表头与数据行同列宽，按显示宽度对齐。
  */
 #include <stddef.h>
@@ -55,7 +55,7 @@ int tool_free(int argc, char **argv, char **envp)
     if (argc > 1) { elog_err("free: usage: free"); return 2; }
     long fd = sys_open("/proc/meminfo", O_RDONLY, 0);
     if (AETHER_IS_ERR(fd)) {
-        elog_err("free: cannot read /proc/meminfo: %d（/proc 未挂载？）", AETHER_ERR_CODE(fd));
+        elog_err("free: cannot read /proc/meminfo: %d (/proc not mounted?)", AETHER_ERR_CODE(fd));
         return 1;
     }
     long n = sys_read((int)fd, buf, sizeof(buf) - 1);

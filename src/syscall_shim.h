@@ -42,7 +42,7 @@
   #elif defined(__riscv) && (__riscv_xlen == 64)
     #include "sysnum/syscall_riscv64.h"
   #else
-    #error "nolibc 分支仅支持 x86_64 / aarch64 / i386 / riscv64；其他架构请用 USE_HOST_LIBC=ON"
+    #error "nolibc branch supports only x86_64 / aarch64 / i386 / riscv64; other arches require USE_HOST_LIBC=ON"
   #endif
   #define AETHER_NR(name) __NR_##name
   #if defined(__NR_open)
@@ -195,6 +195,7 @@ long sys_fsync(int fd);
 long sys_flock(int fd, int operation);
 long sys_setpgid(int pid, int pgid);
 long sys_getpgid(int pid);
+long sys_setsid(void);
 long sys_kill(int pid, int sig);
 long sys_listen(int fd, int backlog);
 long sys_accept4(int fd, void *addr, void *addrlen, int flags);

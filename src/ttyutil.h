@@ -22,7 +22,7 @@ typedef struct {
 
 /* 每工具一份的上下文（禁止全局） */
 typedef struct {
-    int              saved;      /* 1 = 已保存 termios（restore 前有效） */
+    int              saved;      /* 1 = saved termios（restore 前有效） */
     aether_termios_t saved_tios;
 } aether_tty_t;
 

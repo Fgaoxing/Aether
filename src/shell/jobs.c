@@ -31,9 +31,17 @@ void shell_jobs_init(int interactive)
     jobs_interactive = interactive;
     if (!interactive) { shell_pgid = -1; return; }
     long pid = sys_getpid();
-    sys_setpgid((int)pid, (int)pid); /* 失败（如 PID 1 已是组长）忽略 */
+    sys_setsid(); /* 如果已经是会话首领则失败，忽略 */
+    sys_setpgid((int)pid, (int)pid); /* 如果已经是进程组首领则失败，忽略 */
     shell_pgid = (int)pid;
-    /* 抢走终端：shell 成为前台进程组（不抢也不致命，作业启动时再交一次） */
+    /* 尝试把 fd 0 设置为控制终端（initramfs PID 1 的子 shell 没有足够权限） */
+    {
+        aether_termios_t scratch;
+        if (sys_ioctl(0, TTY_IOC_TCGETS, (unsigned long)&scratch) == 0) {
+            sys_ioctl(0, 0x540E /* TIOCSCTTY */, 1);
+        }
+    }
+    /* 抢走终端：shell 成为前台进程组（必须 setsid 之后；不抢也不致命，作业启动时再交一次） */
     tty_setpgrp(0, shell_pgid);
 }
 

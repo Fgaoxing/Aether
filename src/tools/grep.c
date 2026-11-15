@@ -17,8 +17,8 @@
 static void grep_usage(void)
 {
     elog_info("usage: grep [-i -v -n -c -l -q] [-e PATTERN]... [--] PATTERN [FILE...]");
-    elog_info("  -i 忽略大小写   -v 反相匹配   -n 行号   -c 计数   -l 文件名   -q 安静");
-    elog_info("  正则：. * + ? {n,m} ^ $ [..] [^..] (..) |  \\d \\s \\w  \\. 转义");
+    elog_info("  -i ignore case   -v invert match   -n line no   -c count   -l file name   -q quiet");
+    elog_info("  regex: . * + ? {n,m} ^ $ [..] [^..] (..) |  \\d \\s \\w  \\. escape");
 }
 
 typedef struct {

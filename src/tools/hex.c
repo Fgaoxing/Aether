@@ -3,7 +3,7 @@
  * xxd:   offset: hex  ascii
  * od:    offset (hex): hex字节  ascii（-A x -t x1z 风格，不必标准）
  * hexdump: 偏移 十六进制（8 字节一组）
- * hexedit: 全屏十六进制编辑器（^S 保存，^X 退出）
+ * hexedit: 全屏hex editor（^S 保存，^X 退出）
  */
 #include <stddef.h>
 

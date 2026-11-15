@@ -1,5 +1,5 @@
 /*
- * efibootmgr.c — EFI 启动项管理（§10）
+ * efibootmgr.c — EFI boot entry management（§10）
  * CLI 对齐原版 efibootmgr 的参数风格，只做救援场景刚需子集：
  *   efibootmgr                 列出所有启动项 + BootOrder
  *   efibootmgr -v              同上，附带设备路径解码（尽力展示）
@@ -247,22 +247,22 @@ static int cmd_list(int verbose)
         }
         elog_info("BootOrder: %s", order);
     } else {
-        elog_info("BootOrder: 未设置");
+        elog_info("BootOrder: not set");
     }
 
     boot_list_t list;
     list.n = 0;
     char dir[128];
     if (aether_efivars_dir(dir, sizeof(dir)) != 0) {
-        elog_err("efivars: 未发现 UEFI 变量文件系统（非 UEFI 或已禁用）");
+        elog_err("efivars: no UEFI variable filesystem found (not UEFI or disabled)");
         return 1;
     }
     if (aether_foreach_dirent(dir, list_boot_cb, &list) != 0)
-        elog_err("efivars: 读取 %s 失败", dir);
+        elog_err("efivars: read %s failed", dir);
 
     /* 数字序输出 */
     for (int i = 0; i < list.n; i++) {
-        /* 找最小 num（简单选择排序） */
+        /* 找最小 num（简单选择sort） */
         int min_idx = i;
         for (int j = i + 1; j < list.n; j++)
             if (list.entries[j].num < list.entries[min_idx].num) min_idx = j;
@@ -281,9 +281,9 @@ static int cmd_list(int verbose)
 
 static int cmd_delete(unsigned int bootnum)
 {
-    if (sys_geteuid() != 0) { elog_err("efibootmgr: 删除需要 root 权限"); return 1; }
+    if (sys_geteuid() != 0) { elog_err("efibootmgr: delete needs root"); return 1; }
     if (!aether_efivars_boot_exists(bootnum)) {
-        elog_err("efibootmgr: Boot%04x 不存在", bootnum);
+        elog_err("efibootmgr: Boot%04x does not exist", bootnum);
         return 1;
     }
     char prompt[64];
@@ -299,10 +299,10 @@ static int cmd_delete(unsigned int bootnum)
 
     if (!aether_ask(prompt, "y")) { elog_err("efibootmgr: aborted"); return 1; }
     if (aether_efivars_delete_boot(bootnum) != 0) {
-        elog_err("efibootmgr: 删除 Boot%04x 失败（efivars 未挂载为 rw？）", bootnum);
+        elog_err("efibootmgr: delete Boot%04x failed (efivars not mounted rw?)", bootnum);
         return 1;
     }
-    elog_info("Boot%04x 已删除", bootnum);
+    elog_info("Boot%04x deleted", bootnum);
     return 0;
 }
 
@@ -330,18 +330,18 @@ static int parse_bootorder_list(const char *s, unsigned short *out, int max, int
 
 static int cmd_set_order(const char *listarg)
 {
-    if (sys_geteuid() != 0) { elog_err("efibootmgr: 写 NVRAM 需要 root 权限"); return 1; }
+    if (sys_geteuid() != 0) { elog_err("efibootmgr: writing NVRAM needs root"); return 1; }
 
     unsigned short newlist[64];
     int n = 0;
     if (parse_bootorder_list(listarg, newlist, 64, &n) != 0) {
-        elog_err("efibootmgr: -o 格式应为 '0002,0001,0000'");
+        elog_err("efibootmgr: -o format should be like '0002,0001,0000'");
         return 2;
     }
     /* 校验存在性 */
     for (int i = 0; i < n; i++) {
         if (!aether_efivars_boot_exists(newlist[i])) {
-            elog_err("efibootmgr: Boot%04x 不存在，拒绝写入 BootOrder", newlist[i]);
+            elog_err("efibootmgr: Boot%04x does not exist, refusing to write BootOrder", newlist[i]);
             return 1;
         }
     }
@@ -360,11 +360,11 @@ static int cmd_set_order(const char *listarg)
     if (!aether_ask("Proceed? [y/N] ", "y")) { elog_err("efibootmgr: aborted"); return 1; }
 
     if (aether_efivars_set_bootorder(newlist, n) != 0) {
-        elog_err("efibootmgr: 写 BootOrder 失败（efivars 未挂载？试：mount -t efivarfs efivarfs %s 或 -o remount,rw）",
+        elog_err("efibootmgr: write BootOrder failed (efivars not mounted? try: mount -t efivarfs efivarfs %s or -o remount,rw)",
                  "/sys/firmware/efi/efivars");
         return 1;
     }
-    elog_info("BootOrder 已更新");
+    elog_info("BootOrder updated");
     return 0;
 }
 
@@ -373,10 +373,10 @@ int tool_efibootmgr(int argc, char **argv, char **envp)
     (void)envp;
     mem_arena_t *arena = mem_arena_create();
     aether_option_t opts[] = {
-        { 'v', 0, 0, 0, "显示设备路径" },
-        { 'b', 1, 0, 0, "Boot 编号（如 0001）" },
-        { 'B', 0, 0, 0, "删除 -b 指定的启动项" },
-        { 'o', 1, 0, 0, "设置 BootOrder（如 0002,0001）" },
+        { 'v', 0, 0, 0, "show device path" },
+        { 'b', 1, 0, 0, "Boot number (e.g. 0001)" },
+        { 'B', 0, 0, 0, "delete the entry specified with -b" },
+        { 'o', 1, 0, 0, "set BootOrder (e.g. 0002,0001)" },
     };
     const size_t nopts = sizeof(opts) / sizeof(opts[0]);
     aether_args_t out;
@@ -397,15 +397,15 @@ int tool_efibootmgr(int argc, char **argv, char **envp)
     const char *oval = aether_opt_value(opts, nopts, 'o');
 
     /* 组合合法性（§6） */
-    if (have_B && !have_b) { elog_err("efibootmgr: -b 必须搭配 -B"); mem_arena_destroy(arena); return 2; }
-    if (have_b && !have_B) { elog_err("efibootmgr: -b 必须搭配 -B（v1 只支持删除语义）"); mem_arena_destroy(arena); return 2; }
-    if (have_o && have_B)  { elog_err("efibootmgr: -o 与 -B 不能同时出现"); mem_arena_destroy(arena); return 2; }
-    if (have_v && (have_B || have_o)) { elog_err("efibootmgr: -v 仅用于列表"); mem_arena_destroy(arena); return 2; }
+    if (have_B && !have_b) { elog_err("efibootmgr: -b must be combined with -B"); mem_arena_destroy(arena); return 2; }
+    if (have_b && !have_B) { elog_err("efibootmgr: -b must be combined with -B (v1 supports delete only)"); mem_arena_destroy(arena); return 2; }
+    if (have_o && have_B)  { elog_err("efibootmgr: -o and -B cannot appear together"); mem_arena_destroy(arena); return 2; }
+    if (have_v && (have_B || have_o)) { elog_err("efibootmgr: -v is for list only"); mem_arena_destroy(arena); return 2; }
 
     /* 若 NVRAM 写需要，先确保 efivars 可写（只读时尽量 remount） */
     if (have_B || have_o) {
         if (aether_ensure_efivarfs(1) != 0) {
-            elog_err("efibootmgr: 无法挂载/重挂载 efivarfs（需要 root；非 UEFI 系统？）");
+            elog_err("efibootmgr: cannot mount/remount efivarfs (needs root; not UEFI?)");
             mem_arena_destroy(arena);
             return 1;
         }
@@ -415,7 +415,7 @@ int tool_efibootmgr(int argc, char **argv, char **envp)
     if (have_B) {
         unsigned long long bootnum = 0;
         if (!bval || parse_bootnum(bval, &bootnum) != 0) {
-            elog_err("efibootmgr: -b 应为 4 位十六进制，如 0001");
+            elog_err("efibootmgr: -b should be 4-digit hex, e.g. 0001");
             mem_arena_destroy(arena);
             return 2;
         }

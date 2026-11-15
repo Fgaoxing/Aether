@@ -5,7 +5,7 @@
  * resolve 根设备 → 挂载 /newroot → 绑定 proc/sys/dev → pivot_root → execve(init)。
  * 任一步失败：打印明确的 "rescue mode" 信息并进入交互拯救 shell。
  *
- * 拯救 shell 内置命令：cmdline / rescue-boot [override] / efi-cmdline。
+ * 拯救 shell builtins:cmdline / rescue-boot [override] / efi-cmdline。
  */
 #include <stddef.h>
 
@@ -110,18 +110,21 @@ static void rescue_consoles(void)
                 if (fd > 2) sys_close(fd);
                 elog_info("=========================================");
                 elog_info(" aether rescue shell (%s)", pl[i]);
-                elog_info(" 可能原因：root= 参数错误 / 根设备未出现 / 挂载失败");
-                elog_info(" 命令：rescue-boot [root=/dev/... rw] | efi-cmdline [edit] | cmdline");
+                elog_info(" possible causes: root= wrong / root device missing / mount failed");
+                elog_info(" commands: rescue-boot [root=/dev/... rw] | efi-cmdline [edit] | cmdline | exit (= continue boot)");
                 elog_info("=========================================");
-                shell_main(1, (char *[]){ (char *)"aether", 0 }, 0);
+                {
+                    static char *const rescue_env[] = { (char *)"AETHER_INIT=rescue", 0 };
+                    shell_main(1, (char *[]){ (char *)"aether", 0 }, rescue_env);
+                }
                 aether_exit(0);
             }
             if (pid > 0) {
-                elog_info("rescue: 已在 %s 启动救援 shell (pid=%d)", pl[i], pid);
+                elog_info("rescue: rescue shell started on %s (pid=%d)", pl[i], pid);
                 nch++;
                 opened++;
             } else {
-                elog_err("rescue: fork 救援 shell 失败（%d），跳过 %s", AETHER_IS_ERR(pid) ? AETHER_ERR_CODE(pid) : 0, pl[i]);
+                elog_err("rescue: fork rescue shell failed (%d), skip %s", AETHER_IS_ERR(pid) ? AETHER_ERR_CODE(pid) : 0, pl[i]);
             }
             sys_close(fd);
         }
@@ -135,7 +138,7 @@ static void rescue_consoles(void)
             aether_exit(0);
         }
         if (hfd > 0) {
-            elog_info("rescue: uevent 热插拔守护已启动（hotplug）");
+            elog_info("rescue: uevent hotplug daemon started (hotplug)");
             nch++; /* 计入 PID 1 等待集合 */
         }
     }
@@ -148,14 +151,17 @@ static void rescue_consoles(void)
             aether_exit(0);
         }
         if (nfd > 0) {
-            elog_info("rescue: 网络自动配置已启动（后台重试直到成功；含 nonet 可跳过）");
+            elog_info("rescue: network auto-config started (background retry until success; 'nonet' to skip)");
             nch++; /* 计入 PID 1 等待集合 */
         }
     }
 
     if (nch == 0) {
-        elog_info("rescue: 未找到可用终端/串口；使用当前标准输入/输出");
-        shell_main(1, (char *[]){ (char *)"aether", 0 }, 0);
+        elog_info("rescue: no usable tty/serial found; using current stdio");
+        {
+            static char *const rescue_env[] = { (char *)"AETHER_INIT=rescue", 0 };
+            shell_main(1, (char *[]){ (char *)"aether", 0 }, rescue_env);
+        }
         aether_exit(0);
     }
     /* PID 1：等所有 rescue shell 结束；全部结束也绝不退出（否则 panic） */
@@ -220,6 +226,7 @@ int aether_parse_cmdline(const char *cmdline, aether_cmdline_t *out)
             else if (tlen == 2 && aether_strncmp(tok, "ro", 2) == 0) out->ro = 1;
             else if (tlen == 2 && aether_strncmp(tok, "rw", 2) == 0) out->ro = 0;
             else if (tlen == 8 && aether_strncmp(tok, "noresume", 8) == 0) out->noresume = 1;
+            else if (tlen == 13 && aether_strncmp(tok, "aether_rescue", 13) == 0) out->aether_rescue = 1;
             continue;
         }
         size_t klen = (size_t)(eq - tok), vlen = tlen - klen - 1;
@@ -252,6 +259,19 @@ int aether_parse_cmdline(const char *cmdline, aether_cmdline_t *out)
             size_t n = vlen < sizeof(out->resume) - 1 ? vlen : sizeof(out->resume) - 1;
             for (size_t i = 0; i < n; i++) out->resume[i] = val[i];
             out->resume[n] = '\0';
+        } else if (klen == 13 && aether_strncmp(tok, "aether_rescue", 13) == 0) {
+            /* aether_rescue=1/y/yes/true/on → 1；其余（0/n/f/off/false）→ 0 */
+            if (vlen == 1) {
+                out->aether_rescue = (val[0] != '0' && val[0] != 'n' && val[0] != 'N'
+                                   && val[0] != 'f' && val[0] != 'F'
+                                   && val[0] != 'o' && val[0] != 'O') ? 1 : 0;
+            } else if (vlen == 2 && (aether_strncmp(val, "no", 2) == 0 || aether_strncmp(val, "NO", 2) == 0)) {
+                out->aether_rescue = 0;
+            } else if (vlen == 3 && (aether_strncmp(val, "off", 3) == 0 || aether_strncmp(val, "OFF", 3) == 0)) {
+                out->aether_rescue = 0;
+            } else {
+                out->aether_rescue = 1;
+            }
         } else if (klen == 13 && aether_strncmp(tok, "resume_offset", 13) == 0) {
             unsigned long long v = 0;
             for (size_t i = 0; i < vlen; i++) {
@@ -532,7 +552,7 @@ static int foreach_partition(int (*cb)(const char *, const char *, void *), void
 
 int aether_resolve_root(const char *spec, char *out, size_t cap)
 {
-    if (!spec || !*spec) { elog_err("root= 为空"); return -1; }
+    if (!spec || !*spec) { elog_err("root= is empty"); return -1; }
 
     if (has_prefix(spec, "PARTUUID=") || has_prefix(spec, "partuuid=")) {
         probe_ctx_t ctx; ctx.want = spec + 9; ctx.mode = 0; ctx.found = 0; ctx.ioerr = 0;
@@ -540,7 +560,7 @@ int aether_resolve_root(const char *spec, char *out, size_t cap)
             copy_str(out, cap, ctx.out);
             return 0;
         }
-        elog_err("root=%s: 未找到该 PARTUUID 的分区%s", spec, ctx.ioerr ? "（部分分区无读权限，需要 root）" : "");
+        elog_err("root=%s: no partition with that PARTUUID%s", spec, ctx.ioerr ? " (some partitions unreadable, need root)" : "");
         return -1;
     }
     if (has_prefix(spec, "PARTLABEL=") || has_prefix(spec, "partlabel=")) {
@@ -549,7 +569,7 @@ int aether_resolve_root(const char *spec, char *out, size_t cap)
             copy_str(out, cap, ctx.out);
             return 0;
         }
-        elog_err("root=%s: 未找到该 PARTLABEL 的分区%s", spec, ctx.ioerr ? "（部分分区无读权限，需要 root）" : "");
+        elog_err("root=%s: no partition with that PARTLABEL%s", spec, ctx.ioerr ? " (some partitions unreadable, need root)" : "");
         return -1;
     }
     if (has_prefix(spec, "UUID=") || has_prefix(spec, "uuid=")) {
@@ -583,19 +603,19 @@ int aether_resolve_root(const char *spec, char *out, size_t cap)
                 else { ok = 0; break; }
                 x1 = (x1 << 4) | (unsigned)d;
             }
-            if (!ok) { elog_err("root=UUID=%s: 格式错误", v); return -1; }
+            if (!ok) { elog_err("root=UUID=%s: bad format", v); return -1; }
             ctx.bin[0] = (unsigned char)(x0 & 0xff);
             ctx.bin[1] = (unsigned char)((x0 >> 8) & 0xff);
             ctx.bin[2] = (unsigned char)(x1 & 0xff);
             ctx.bin[3] = (unsigned char)((x1 >> 8) & 0xff);
         } else {
-            if (uuid_parse(v, ctx.bin) != 0) { elog_err("root=UUID=%s: 格式错误", v); return -1; }
+            if (uuid_parse(v, ctx.bin) != 0) { elog_err("root=UUID=%s: bad format", v); return -1; }
         }
         if (foreach_partition(probe_cb, &ctx) > 0 && ctx.found) {
             copy_str(out, cap, ctx.out);
             return 0;
         }
-        elog_err("root=%s: 未找到该 UUID 的分区（仅支持 ext4/vfat/btrfs）%s", spec, ctx.ioerr ? "（部分分区无读权限，需要 root）" : "");
+        elog_err("root=%s: no partition with that UUID (ext4/vfat/btrfs only)%s", spec, ctx.ioerr ? " (some partitions unreadable, need root)" : "");
         return -1;
     }
     if (has_prefix(spec, "LABEL=") || has_prefix(spec, "label=")) {
@@ -604,17 +624,17 @@ int aether_resolve_root(const char *spec, char *out, size_t cap)
             copy_str(out, cap, ctx.out);
             return 0;
         }
-        elog_err("root=%s: 未找到该 LABEL 的分区（仅支持 ext4/vfat）%s", spec, ctx.ioerr ? "（部分分区无读权限，需要 root）" : "");
+        elog_err("root=%s: no partition with that LABEL (ext4/vfat only)%s", spec, ctx.ioerr ? " (some partitions unreadable, need root)" : "");
         return -1;
     }
     if (spec[0] == '/') {
         long fd = sys_open(spec, O_RDONLY, 0);
-        if (AETHER_IS_ERR(fd)) { elog_err("root=%s: 不存在或不可访问（%d）", spec, AETHER_ERR_CODE(fd)); return -1; }
+        if (AETHER_IS_ERR(fd)) { elog_err("root=%s: does not exist or not accessible (%d)", spec, AETHER_ERR_CODE(fd)); return -1; }
         sys_close((int)fd);
         copy_str(out, cap, spec);
         return 0;
     }
-    elog_err("root=%s: 无法解析（支持 /dev/*、PARTUUID=、PARTLABEL=、UUID=、LABEL=）", spec);
+    elog_err("root=%s: cannot parse (supported: /dev/*, PARTUUID=, PARTLABEL=, UUID=, LABEL=)", spec);
     return -1;
 }
 
@@ -718,31 +738,31 @@ static int aether_resolve_resume(const char *spec, char *majmin, size_t majmin_c
         has_prefix(spec, "PARTLABEL=") || has_prefix(spec, "partlabel=")) {
         /* 分区 UUID/Label：走 sysfs，不依赖文件系统魔数 */
         if (aether_resolve_root(spec, dev, sizeof(dev)) != 0) {
-            elog_err("resume: %s 解析失败", spec);
+            elog_err("resume: %s: parse failed", spec);
             return -1;
         }
     } else if (has_prefix(spec, "UUID=") || has_prefix(spec, "uuid=")) {
         unsigned char want[16];
-        if (uuid_parse(spec + 5, want) != 0) { elog_err("resume: 无效的 UUID '%s'", spec + 5); return -1; }
+        if (uuid_parse(spec + 5, want) != 0) { elog_err("resume: invalid UUID '%s'", spec + 5); return -1; }
         resume_ctx_t ctx;
         ctx.want = spec + 5;
         for (int i = 0; i < 16; i++) ctx.want_uuid[i] = want[i];
         ctx.found = 0; ctx.ioerr = 0;
         if (foreach_partition(resume_probe_cb, &ctx) > 0 && ctx.found)
             copy_str(dev, sizeof(dev), ctx.out);
-        else { elog_err("resume: 未找到含该 UUID 的 swap 设备"); return -1; }
+        else { elog_err("resume: no swap device with that UUID"); return -1; }
     } else if (spec[0] == '/') {
         long fd = sys_open(spec, O_RDONLY, 0);
-        if (AETHER_IS_ERR(fd)) { elog_err("resume: 设备 %s 不存在或不可访问（%d）", spec, AETHER_ERR_CODE(fd)); return -1; }
+        if (AETHER_IS_ERR(fd)) { elog_err("resume: device %s missing or not accessible (%d)", spec, AETHER_ERR_CODE(fd)); return -1; }
         sys_close((int)fd);
         copy_str(dev, sizeof(dev), spec);
     } else {
-        elog_err("resume: 不支持的 spec '%s'（支持 /dev/...、PARTUUID=、PARTLABEL=、UUID=、major:minor）", spec);
+        elog_err("resume: unsupported spec '%s' (supported: /dev/..., PARTUUID=, PARTLABEL=, UUID=, major:minor)", spec);
         return -1;
     }
 
     if (block_dev_majmin(dev, majmin, majmin_cap) != 0) {
-        elog_err("resume: 无法读 %s 的 major:minor（/sys/class/block 未就绪？）", dev);
+        elog_err("resume: cannot read major:minor of %s (/sys/class/block not ready?)", dev);
         return -1;
     }
     if (devpath_out) copy_str(devpath_out, devpath_cap, dev);
@@ -764,43 +784,96 @@ static int sysfs_write_line(const char *path, const char *data, size_t len)
     return AETHER_IS_ERR(r) ? -1 : 0;
 }
 
+/* 解析 /etc/aether/resume 文件内容（aether-resume hook 探测后写入镜像，格式：
+ *   resume=UUID=xxx            → 仅 resume=
+ *   resume=/dev/XXX resume_offset=N  → 两行拆成一个 spec（一行）
+ * 失败/文件不存在 → 返回 -1（不修改 opts）
+ * 不使用动态内存，POSIX-ish 行行解析 */
+static int apply_resume_file(const char *path, aether_cmdline_t *opts)
+{
+    char buf[512];
+    size_t len = 0;
+    if (aether_read_file(path, buf, sizeof(buf) - 1, &len) != 0) return -1;
+    buf[len] = '\0';
+    /* 行内空白分隔 token 逐个处理：resume=XXX resume_offset=NNN */
+    char *p = buf;
+    int got = 0;
+    while (*p) {
+        while (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r') p++;
+        const char *tok = p;
+        while (*p && *p != ' ' && *p != '\t' && *p != '\n' && *p != '\r') p++;
+        size_t tlen = (size_t)(p - tok);
+        if (tlen >= 7 && aether_strncmp(tok, "resume=", 7) == 0) {
+            size_t vlen = tlen - 7;
+            size_t n = vlen < sizeof(opts->resume) - 1 ? vlen : sizeof(opts->resume) - 1;
+            for (size_t i = 0; i < n; i++) opts->resume[i] = tok[7 + i];
+            opts->resume[n] = '\0';
+            got = 1;
+        } else if (tlen >= 15 && aether_strncmp(tok, "resume_offset=", 15) == 0) {
+            unsigned long long v = 0;
+            for (size_t i = 15; i < tlen; i++) {
+                char ch = tok[i];
+                if (ch < '0' || ch > '9') { v = 0; break; }
+                v = v * 10 + (unsigned)(ch - '0');
+            }
+            opts->resume_offset = v;
+        }
+    }
+    return got ? 0 : -1;
+}
+
 /* 在 aether_boot_attempt 最前面调用：处理 resume= / resume_offset= / noresume。
  * 内核语义：resume= 表示"尝试从休眠镜像恢复"；没找到镜像就继续正常启动。
+ * cmdline 含 resume= 时优先；否则 fallback 到 /etc/aether/resume（aether-resume hook 写入的探测值）。
  * 失败仅告警，不中断 boot。 */
-static void try_hibernate_resume(const aether_cmdline_t *opts)
+static void try_hibernate_resume(const aether_cmdline_t *opts_orig)
 {
-    if (opts->noresume) {
-        elog_info("resume: cmdline 含 noresume，跳过休眠恢复");
+    aether_cmdline_t opts_storage;
+    const aether_cmdline_t *opts = opts_orig;
+    if (opts_orig->noresume) {
+        elog_info("resume: noresume in cmdline, skipping hibernation resume");
         return;
+    }
+    /* 优先 cmdline；其次 /etc/aether/resume（aether-resume hook 自动探测） */
+    if (opts->resume[0] == '\0') {
+        opts_storage = *opts_orig;
+        if (apply_resume_file("/etc/aether/resume", &opts_storage) == 0 && opts_storage.resume[0]) {
+            if (opts_storage.resume_offset)
+                elog_info("resume: using /etc/aether/resume (auto-detected): %s resume_offset=%llu",
+                          opts_storage.resume, opts_storage.resume_offset);
+            else
+                elog_info("resume: using /etc/aether/resume (auto-detected): %s", opts_storage.resume);
+            opts = &opts_storage;
+        }
     }
     if (opts->resume[0] == '\0') return;
 
     /* /sys/power/resume 存在？（需要 CONFIG_HIBERNATION；sysfs 已在 PID 1 step 1 挂载） */
     long fd = sys_open("/sys/power/resume", O_WRONLY, 0);
     if (AETHER_IS_ERR(fd)) {
-        elog_info("resume: /sys/power/resume 不可用（内核未启用休眠或 /sys 未挂载）——跳过");
+        elog_info("resume: /sys/power/resume unavailable (hibernation disabled or /sys not mounted) -- skipping");
         return;
     }
     sys_close((int)fd);
 
     char majmin[32], devpath[64];
     if (aether_resolve_resume(opts->resume, majmin, sizeof(majmin), devpath, sizeof(devpath)) != 0) {
-        elog_err("resume: 无法解析 '%s'，休眠恢复被跳过（boot 继续）", opts->resume);
+        elog_err("resume: could not parse '%s', hibernation resume skipped (boot continues)", opts->resume);
         return;
     }
     if (sysfs_write_line("/sys/power/resume", majmin, aether_strlen(majmin)) != 0) {
-        elog_err("resume: 写 /sys/power/resume 失败（权限？内核禁用？）");
+        elog_err("resume: write to /sys/power/resume failed (permission? kernel disabled?)");
         return;
     }
-    elog_info("resume: 已写入 /sys/power/resume=%s%s%s%s", majmin,
-              devpath[0] ? "（设备 " : "", devpath[0] ? devpath : "", devpath[0] ? "）" : "");
+    elog_info("resume: wrote /sys/power/resume=%s%s%s%s", majmin,
+              devpath[0] ? "(device " : "", devpath[0] ? devpath : "", devpath[0] ? "）" : "");
     if (opts->resume_offset != 0) {
         char obuf[24];
         size_t n = aether_u64toa(obuf, sizeof(obuf), opts->resume_offset);
         if (sysfs_write_line("/sys/power/resume_offset", obuf, n) != 0)
-            elog_err("resume: 写 /sys/power/resume_offset 失败");
+            elog_err("resume: write to /sys/power/resume_offset failed");
         else
-            elog_info("resume: 已写入 /sys/power/resume_offset=%s（PAGE_SIZE 单位）", obuf);
+            elog_info("resume: wrote /sys/power/resume_offset=%s (PAGE_SIZE units)", obuf);
     }
 }
 
@@ -826,25 +899,25 @@ static int do_final_switch(const char *init_path)
 {
     /* 绑定 /proc /sys /dev 进新根并 pivot */
     if (sys_mount("proc", NEWROOT "/proc", "proc", 0, 0) != 0)
-        elog_err("boot: warning: mount proc 失败");
+        elog_err("boot: warning: mount proc failed");
     if (sys_mount("sysfs", NEWROOT "/sys", "sysfs", 0, 0) != 0)
-        elog_err("boot: warning: mount sys 失败");
+        elog_err("boot: warning: mount sys failed");
     if (sys_mount("devtmpfs", NEWROOT "/dev", "devtmpfs", 0, 0) != 0)
-        elog_err("boot: warning: mount dev 失败");
+        elog_err("boot: warning: mount dev failed");
 
     sys_mkdirat(AT_FDCWD, NEWROOT "/" STASH, 0700);
 
-    if (sys_chdir(NEWROOT) != 0) { elog_err("boot: chdir %s 失败", NEWROOT); return -1; }
+    if (sys_chdir(NEWROOT) != 0) { elog_err("boot: chdir %s failed", NEWROOT); return -1; }
     long r = sys_pivot_root(".", STASH);
     if (AETHER_IS_ERR(r)) {
-        elog_err("boot: pivot_root 失败（%d）——initramfs 需要内核支持 pivot_root", AETHER_ERR_CODE(r));
+        elog_err("boot: pivot_root failed (%d) -- initramfs needs kernel pivot_root support", AETHER_ERR_CODE(r));
         sys_chdir("/");
         return -1;
     }
     /* 停掉后台 DELETE 监听：真正的 init 接管前恢复控制台（幂等） */
     aether_del_watch_stop();
     if (aether_del_pressed()) {
-        elog_info("boot: 启动期按下 DELETE——不 exec init，进入救援");
+        elog_info("boot: DELETE pressed at boot -- not execing init, entering rescue");
         return -1;
     }
     sys_chdir("/");
@@ -861,12 +934,12 @@ static int do_final_switch(const char *init_path)
     };
     char *a[] = { (char *)init_path, 0 };
     long er = sys_execve(init_path, a, child_env);
-    elog_err("boot: exec %s 失败（%d）", init_path, AETHER_IS_ERR(er) ? AETHER_ERR_CODE(er) : 0);
+    elog_err("boot: exec %s failed (%d)", init_path, AETHER_IS_ERR(er) ? AETHER_ERR_CODE(er) : 0);
 
     /* 兜底：/bin/sh */
     char *a2[] = { (char *)"sh", 0 };
     er = sys_execve("/bin/sh", a2, child_env);
-    elog_err("boot: exec /bin/sh 也失败（%d）——系统无法启动", er);
+    elog_err("boot: exec /bin/sh also failed (%d) -- system cannot start", er);
     return -1;
 }
 
@@ -902,11 +975,11 @@ int aether_boot_attempt(const aether_cmdline_t *opts)
         long fd = sys_open(dev, O_RDONLY, 0);
         if (!AETHER_IS_ERR(fd)) { sys_close((int)fd); break; }
         if (aether_del_pressed()) {
-            elog_info("boot: 启动期按下 DELETE——中止 rootwait 等待，进入救援");
+            elog_info("boot: DELETE pressed at boot -- aborting rootwait, entering rescue");
             return -1;
         }
         if (i >= tries) {
-            elog_err("boot: 根设备 %s 未出现（rootwait 超时）", dev);
+            elog_err("boot: root device %s did not appear (rootwait timeout)", dev);
             return -1;
         }
         struct { long sec; long nsec; } ts = { 0, 100UL * 1000UL * 1000UL }; /* 100ms */
@@ -922,20 +995,20 @@ int aether_boot_attempt(const aether_cmdline_t *opts)
     int mounted = 0;
     if (opts->rootfstype[0]) {
         if (sys_mount(dev, NEWROOT, opts->rootfstype, flags, mount_data) == 0) mounted = 1;
-        else elog_err("boot: 挂载 %s fstype=%s 失败", dev, opts->rootfstype);
+        else elog_err("boot: mount %s fstype=%s failed", dev, opts->rootfstype);
     } else {
         static const char *const fstypes[] = { "ext4", "ext2", "xfs", "btrfs", "f2fs", "reiserfs", "vfat", 0 };
         for (int i = 0; !mounted && fstypes[i]; i++) {
             if (sys_mount(dev, NEWROOT, fstypes[i], flags, mount_data) == 0) mounted = 1;
         }
         if (!mounted)
-            elog_err("boot: 无法挂载 %s（尝试了 ext4/ext2/xfs/btrfs/f2fs/reiserfs/vfat；请指定 rootfstype=）", dev);
+            elog_err("boot: cannot mount %s (tried ext4/ext2/xfs/btrfs/f2fs/reiserfs/vfat; specify rootfstype=)", dev);
     }
     if (!mounted) return -1;
 
     /* 提前确认 init 存在 */
     if (check_init_exists(opts->init) != 0) {
-        elog_err("boot: 新根中找不到 init（%s）", opts->init);
+        elog_err("boot: init not found in new root (%s)", opts->init);
         return -1;
     }
 
@@ -986,6 +1059,39 @@ static void del_child_stop_handler(int sig) { (void)sig; g_del_child_stop = 1; }
 #define AETHER_INPUT_EVENT_SIZE 16u
 #endif
 
+/* 扫描并打开当前存在的 evdev 节点 /dev/input/eventN（N=0..31）。
+ * 已打开的（opened_mask bit i）跳过。返回新打开的 evdev fd 数。 */
+#define AETHER_EV_SCAN_MAX 32
+static int aether_evscan(int evfds[], int *nev, unsigned *opened_mask)
+{
+    static const char prefix[] = "/dev/input/event";
+    int added = 0;
+    for (int idx = 0; idx < AETHER_EV_SCAN_MAX; idx++) {
+        if (*opened_mask & (1u << idx)) continue;
+        char path[32];
+        int p = 0;
+        while (prefix[p]) { path[p] = prefix[p]; p++; }
+        unsigned v = (unsigned)idx;
+        char num[3];
+        int ni = 0;
+        if (v == 0) num[ni++] = '0';
+        while (v) { num[ni++] = (char)('0' + (v % 10)); v /= 10; }
+        while (ni > 0) path[p++] = num[--ni];
+        path[p] = '\0';
+        long fd = sys_open(path, O_RDONLY | O_NONBLOCK, 0);
+        if (AETHER_IS_ERR(fd)) continue;
+        if (*nev < (int)(sizeof(evfds) / sizeof(evfds[0]))) {
+            evfds[*nev] = (int)fd;
+            (*nev)++;
+            *opened_mask |= (1u << idx);
+            added++;
+        } else {
+            sys_close((int)fd);
+        }
+    }
+    return added;
+}
+
 static int aether_del_watcher_child(void)
 {
     aether_signal(SIGTERM, del_child_stop_handler);
@@ -994,28 +1100,15 @@ static int aether_del_watcher_child(void)
 
     long ppid = sys_getppid();
 
-    /* 通道 A：evdev（真键盘） */
-    int evfds[32];
+    /* 通道 A：evdev（真键盘）。
+     * 注意：USB HID 键盘可能比 PID 1 晚枚举出来——所以 evdev fd 不只在启动时打开一次，
+     * 而是整个窗口内周期性重扫 event0..31，发现新节点就加入监听。 */
+    int evfds[64];
     int nev = 0;
-    {
-        static const char prefix[] = "/dev/input/event";
-        for (int idx = 0; idx < 32; idx++) {
-            char path[32];
-            int p = 0;
-            while (prefix[p]) { path[p] = prefix[p]; p++; }
-            unsigned v = (unsigned)idx;
-            char num[3];
-            int ni = 0;
-            if (v == 0) num[ni++] = '0';
-            while (v) { num[ni++] = (char)('0' + (v % 10)); v /= 10; }
-            while (ni > 0) path[p++] = num[--ni];
-            path[p] = '\0';
-            long fd = sys_open(path, O_RDONLY | O_NONBLOCK, 0);
-            if (AETHER_IS_ERR(fd)) continue;
-            if (nev < (int)(sizeof(evfds) / sizeof(evfds[0]))) evfds[nev++] = (int)fd;
-            else sys_close((int)fd);
-        }
-    }
+    unsigned opened_mask = 0; /* bit i = /dev/input/eventN 已打开 */
+    for (int idx = 0; idx < 64; idx++) evfds[idx] = -1;
+
+    aether_evscan(evfds, &nev, &opened_mask);
 
     /* 通道 B：console 输入侧 raw（OPOST 保留） */
     int fd = aether_tty_open_rw();
@@ -1032,13 +1125,15 @@ static int aether_del_watcher_child(void)
     }
 
     if (!have_tty && nev == 0) {
-        elog_err("aether: DELETE 监听不可用（无控制台也无 evdev 设备）");
+        elog_err("aether: DELETE watch unavailable (no console and no evdev device)");
         return 0;
     }
 
     int found = 0;
     unsigned char buf[64];
+    int scan_ms = 0;              /* 距上次 evdev 重扫的毫秒数；满 100ms 再扫 */
     while (!found && !g_del_child_stop) {
+        if (scan_ms >= 100) { aether_evscan(evfds, &nev, &opened_mask); scan_ms = 0; }
         if (have_tty) {
             long n = sys_read(fd, buf, sizeof(buf));
             if (n > 0) {
@@ -1076,6 +1171,7 @@ static int aether_del_watcher_child(void)
         if (!found) {
             struct { long sec; long nsec; } ts = { 0, 5UL * 1000UL * 1000UL };
             sys_nanosleep(&ts, 0);
+            scan_ms += 5;
         }
     }
 
@@ -1095,7 +1191,7 @@ static void aether_del_watch_start(void)
     aether_signal(SIGUSR1, del_rescue_handler);
     long pid = sys_fork();
     if (AETHER_IS_ERR(pid)) {
-        elog_err("aether: DELETE 监听 fork 失败——本次启动不支持按键中止（boot 继续）");
+        elog_err("aether: DELETE watch fork failed -- this boot does not support key interrupt (boot continues)");
         return;
     }
     if (pid == 0) {
@@ -1103,7 +1199,7 @@ static void aether_del_watch_start(void)
         aether_exit(0);
     }
     g_del_watcher = pid;
-    elog_info("aether: DELETE 后台监听已启动（启动期按下即进入救援模式，不增加启动时间）");
+    elog_info("aether: DELETE background watch started (press during boot to enter rescue mode, adds no boot time)");
 }
 
 /* 停掉 watcher（SIGTERM → wait4 → 恢复控制台）。幂等。 */
@@ -1129,8 +1225,8 @@ static int aether_del_rescue_hit(void)
     if (!g_del_rescue) return 0;
     elog_info("");
     elog_info("=========================================");
-    elog_info(" 手动 rescue 模式（启动期按下 DELETE）");
-    elog_info(" 输入 rescue-boot / cmdline / efi-cmdline 重试启动");
+    elog_info(" manual rescue mode (DELETE pressed during boot)");
+    elog_info(" type rescue-boot / cmdline / efi-cmdline to retry booting");
     elog_info("=========================================");
     elog_info("");
     rescue_consoles();
@@ -1172,13 +1268,25 @@ int aether_init_main(char **envp)
     /* 3. 读 cmdline */
     aether_cmdline_t opts;
     if (aether_cmdline_file("/proc/cmdline", &opts) != 0) {
-        elog_info("aether: 无法读取 /proc/cmdline");
+        elog_info("aether: cannot read /proc/cmdline");
         rescue_consoles();
         return 0; /* 不可达 */
     }
 
     /* 1.10 DELETE 检查点 4：boot 前最后一眼 */
     if (aether_del_rescue_hit()) return 0; /* 不可达 */
+
+    /* 1.11 aether_rescue 标记：确定性进入救援（不 mount root、不 exec init，直接 rescue） */
+    if (opts.aether_rescue) {
+        elog_info("");
+        elog_info("=========================================");
+        elog_info(" FORCED RESCUE MODE (cmdline token: aether_rescue)");
+        elog_info("  type rescue-boot / cmdline / efi-cmdline / exit (= continue boot)");
+        elog_info("=========================================");
+        elog_info("");
+        rescue_consoles();
+        return 0; /* 不可达 */
+    }
 
     /* 4. boot */
     if (aether_boot_attempt(&opts) == 0)
@@ -1187,14 +1295,14 @@ int aether_init_main(char **envp)
     /* 5. 失败：回退到全部可用终端/串口 */
     elog_info("");
     elog_info("=========================================");
-    elog_info(" BOOT FAILED — 进入拯救模式 (rescue mode)");
-    elog_info(" 可能原因：root= 参数错误 / 根设备未出现 / 挂载失败");
-    elog_info(" 你可以编辑 EFI 启动项的 cmdline 后重试：");
-    elog_info("   rescue-boot                  # 用当前 cmdline 重试");
-    elog_info("   rescue-boot root=/dev/... rw # 用指定参数重试");
-    elog_info("   efi-cmdline                  # 查看 EFI 启动项的 cmdline");
-    elog_info("   efi-cmdline edit             # 编辑并回写 EFI 启动项（需 root）");
-    elog_info("   cmdline                      # 查看 /proc/cmdline");
+    elog_info(" BOOT FAILED -- entering rescue mode");
+    elog_info(" possible causes: root= wrong / root device missing / mount failed");
+    elog_info(" you can edit the EFI boot entry cmdline and retry:");
+    elog_info("   rescue-boot                  # retry with current cmdline");
+    elog_info("   rescue-boot root=/dev/... rw # retry with specified args");
+    elog_info("   efi-cmdline                  # show EFI boot entry cmdline");
+    elog_info("   efi-cmdline edit             # edit and write back EFI entry (needs root)");
+    elog_info("   cmdline                      # show /proc/cmdline");
     elog_info("=========================================");
     elog_info("");
     rescue_consoles();
@@ -1210,7 +1318,7 @@ int aether_cmd_cmdline(int argc, char **argv, char **envp)
     char buf[4096];
     size_t len = 0;
     if (aether_read_file("/proc/cmdline", buf, sizeof(buf) - 1, &len) != 0) {
-        elog_err("cmdline: 无法读 /proc/cmdline");
+        elog_err("cmdline: cannot read /proc/cmdline");
         return 1;
     }
     buf[len] = '\0';
@@ -1236,16 +1344,21 @@ int aether_cmd_rescue_boot(int argc, char **argv, char **envp)
         }
         cmdline_buf[d] = '\0';
         if (aether_parse_cmdline(cmdline_buf, &opts) != 0) return 2;
-        elog_info("rescue-boot: 使用覆盖 cmdline: %s", cmdline_buf);
+        elog_info("rescue-boot: using override cmdline: %s", cmdline_buf);
     } else {
+        /* 从默认 /proc/cmdline 构造 retry 用的 opts：剔除 aether_rescue（否则无法离开强制救援） */
         if (aether_cmdline_file("/proc/cmdline", &opts) != 0) {
-            elog_err("rescue-boot: 无法读 /proc/cmdline");
+            elog_err("rescue-boot: cannot read /proc/cmdline");
             return 1;
         }
-        elog_info("rescue-boot: 重试启动（root=%s）...", opts.root[0] ? opts.root : "(未设置)");
+        if (opts.aether_rescue) {
+            opts.aether_rescue = 0; /* retry 强制进正常启动流程 */
+            elog_info("rescue-boot: aether_rescue in cmdline ignored (retry normal boot)");
+        }
+        elog_info("rescue-boot: retrying boot (root=%s)...", opts.root[0] ? opts.root : "(not set)");
     }
     if (aether_boot_attempt(&opts) == 0) return 0; /* 不会到这里 */
-    elog_err("rescue-boot: 启动失败");
+    elog_err("rescue-boot: boot failed");
     return 1;
 }
 
@@ -1384,7 +1497,7 @@ static int efi_show_current(void)
 {
     unsigned short bootcur = 0;
     if (efivar_read_int("BootCurrent", &bootcur) != 0) {
-        elog_err("efi-cmdline: 无法读取 BootCurrent（可能不是从 EFI 启动的）");
+        elog_err("efi-cmdline: cannot read BootCurrent (not an EFI boot?)");
         return 1;
     }
     elog_info("BootCurrent: %04x", bootcur);
@@ -1392,47 +1505,47 @@ static int efi_show_current(void)
     unsigned char buf[2048];
     size_t len = 0;
     if (efivar_read_boot(bootcur, buf, sizeof(buf), &len) != 0) {
-        elog_err("efi-cmdline: 无法读取 Boot%04x", bootcur);
+        elog_err("efi-cmdline: cannot read Boot%04x", bootcur);
         return 1;
     }
     efistub_t e;
     if (efistub_parse(buf, len, &e) != 0) {
-        elog_err("efi-cmdline: 无法解析 Boot%04x 的 EFI 启动项", bootcur);
+        elog_err("efi-cmdline: cannot parse EFI boot entry Boot%04x", bootcur);
         return 1;
     }
-    elog_info("启动项: %s", e.desc[0] ? e.desc : "(无描述)");
+    elog_info("entry: %s", e.desc[0] ? e.desc : "(no description)");
     if (e.cmdline[0])
         elog_info("cmdline: %s", e.cmdline);
     else
-        elog_info("cmdline: (空，或非 efistub/grub 直启格式)");
+        elog_info("cmdline: (empty, or not an efistub/grub direct-boot format)");
     return 0;
 }
 
 static int efi_edit_current(char **envp)
 {
     (void)envp;
-    if (sys_geteuid() != 0) { elog_err("efi-cmdline edit: 需要 root 权限"); return 1; }
+    if (sys_geteuid() != 0) { elog_err("efi-cmdline edit: needs root"); return 1; }
 
     unsigned short bootcur = 0;
     if (efivar_read_int("BootCurrent", &bootcur) != 0) {
-        elog_err("efi-cmdline: 无法读取 BootCurrent");
+        elog_err("efi-cmdline: cannot read BootCurrent");
         return 1;
     }
     unsigned char buf[2048];
     size_t len = 0;
     if (efivar_read_boot(bootcur, buf, sizeof(buf), &len) != 0) {
-        elog_err("efi-cmdline: 无法读取 Boot%04x", bootcur);
+        elog_err("efi-cmdline: cannot read Boot%04x", bootcur);
         return 1;
     }
     efistub_t e;
     if (efistub_parse(buf, len, &e) != 0) {
-        elog_err("efi-cmdline: 无法解析 Boot%04x", bootcur);
+        elog_err("efi-cmdline: cannot parse Boot%04x", bootcur);
         return 1;
     }
 
-    elog_info("启动项: %s", e.desc[0] ? e.desc : "(无描述)");
-    elog_info("当前 cmdline: %s", e.cmdline[0] ? e.cmdline : "(空)");
-    elog_info("输入新 cmdline（原样回车 = 放弃）:");
+    elog_info("entry: %s", e.desc[0] ? e.desc : "(no description)");
+    elog_info("current cmdline: %s", e.cmdline[0] ? e.cmdline : "(empty)");
+    elog_info("enter new cmdline (empty = abort):");
     elog_write(2, "> ");
     char newcmd[1024];
     size_t n = 0;
@@ -1447,14 +1560,14 @@ static int efi_edit_current(char **envp)
         }
         newcmd[n] = '\0';
     }
-    if (n == 0) { elog_err("efi-cmdline: 已放弃"); return 1; }
+    if (n == 0) { elog_err("efi-cmdline: aborted"); return 1; }
 
     /* 组装新内容：保留 attrs/lo_attrs/desc/DevicePath，仅替换 OptionalData */
     size_t header = e.od_off;
     size_t utf16_len = 0;
     size_t cap_u16 = (n + 1) * 2 + 2;
     unsigned char payload[2048];
-    if (header + cap_u16 > sizeof(payload)) { elog_err("efi-cmdline: 新 cmdline 过长"); return 1; }
+    if (header + cap_u16 > sizeof(payload)) { elog_err("efi-cmdline: new cmdline too long"); return 1; }
 
     /* 拷贝头部 */
     for (size_t i = 0; i < header; i++) payload[i] = buf[i];
@@ -1469,29 +1582,29 @@ static int efi_edit_current(char **envp)
     payload[d++] = 0;
     (void)utf16_len; (void)cap_u16;
 
-    elog_info("旧: %s", e.cmdline);
-    elog_info("新: %s", newcmd);
-    if (!aether_ask("写回 EFI 启动项? [y/N] ", "y")) {
-        elog_err("efi-cmdline: 已放弃");
+    elog_info("old: %s", e.cmdline);
+    elog_info("new: %s", newcmd);
+    if (!aether_ask("write back to EFI entry? [y/N] ", "y")) {
+        elog_err("efi-cmdline: aborted");
         return 1;
     }
     if (efivar_write_boot(bootcur, payload, d) != 0) {
-        elog_err("efi-cmdline: 写回失败（efivars 需 rw 且 root）");
+        elog_err("efi-cmdline: write failed (efivars must be rw, need root)");
         return 1;
     }
-    elog_info("EFI 启动项已更新");
+    elog_info("EFI entry updated");
 
-    if (aether_ask("用新 cmdline 立即重试启动? [y/N] ", "y")) {
+    if (aether_ask("retry boot with new cmdline now? [y/N] ", "y")) {
         /* 直接 boot，不退出当前进程 */
         aether_cmdline_t opts;
         aether_parse_cmdline(newcmd, &opts);
         if (aether_boot_attempt(&opts) != 0) {
-            elog_err("efi-cmdline: 重试启动失败（原 EFI 项已更新，重启后即生效）");
+            elog_err("efi-cmdline: retry failed (EFI entry updated, will take effect on reboot)");
             return 1;
         }
         return 0; /* 不可达 */
     }
-    elog_info("已保存。重启即按新 cmdline 启动");
+    elog_info("saved. reboot will use the new cmdline");
     return 0;
 }
 

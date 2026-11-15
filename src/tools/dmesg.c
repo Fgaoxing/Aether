@@ -1,5 +1,5 @@
 /*
- * dmesg.c — 内核日志（§5/§12.5）
+ * dmesg.c — kernel log（§5/§12.5）
  * 优先 sys_syslog(READ_ALL)；EPERM/ENOSYS 时提示权限/平台问题。v1 不分页（| less 自行接续）。
  */
 #include <stddef.h>
@@ -36,9 +36,9 @@ int tool_dmesg(int argc, char **argv, char **envp)
     if (AETHER_IS_ERR(n)) {
         int e = AETHER_ERR_CODE(n);
         if (e == 1) /* EPERM */
-            elog_err("dmesg: 权限不足（需要 root / CAP_SYSLOG，或内核 kernel.dmesg_restrict=0）");
+            elog_err("dmesg: permission denied (need root / CAP_SYSLOG, or kernel.dmesg_restrict=0)");
         else
-            elog_err("dmesg: syslog 失败（%d）——此内核可能不支持 syslog 接口", e);
+            elog_err("dmesg: syslog failed (%d) -- this kernel may not support the syslog interface", e);
         return 1;
     }
     /* 输出：逐行剥掉 printk 级别前缀 "<n>" */

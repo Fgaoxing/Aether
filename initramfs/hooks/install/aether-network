@@ -40,6 +40,35 @@ build() {
     add_module 'virtio_net'  # virtio-net（QEMU/KVM）
     add_module 'vmxnet3'     # VMware 高级 NIC
     add_module 'hv_netvsc'   # Hyper-V 合成 NIC
+    # USB 有线网卡（救援场景常用联网手段：USB 网卡插上即能自动联网）
+    add_module 'usbnet?'
+    add_module 'cdc_ether?'
+    add_module 'cdc_ncm?'
+    add_module 'cdc_eem?'
+    add_module 'cdc_subset?'
+    add_module 'rndis_host?'
+    add_module 'asix?'
+    add_module 'ax88179_178a?'
+    add_module 'aqc111?'
+    add_module 'dm9601?'
+    add_module 'mcs7830?'
+    add_module 'lan78xx?'
+    add_module 'smsc75xx?'
+    add_module 'smsc95xx?'
+    add_module 'r8152?'
+    add_module 'r8153_ecm?'
+    add_module 'rtl8150?'
+    add_module 'pegasus?'
+    add_module 'net1080?'
+    add_module 'kaweth?'
+    add_module 'zaurus?'
+    add_module 'catc?'
+    add_module 'sr9700?'
+    add_module 'sr9800?'
+    add_module 'plusb?'
+    add_module 'int51x1?'
+    add_module 'ch9200?'
+    add_module 'gl620a?'
     # 依赖库
     add_module 'mii'         # rtl8169 以及其它依赖 MII 总线的 PHY
     add_module 'mdio'        # MDIO PHY 控制器（部分驱动需要）
@@ -49,12 +78,13 @@ build() {
 help() {
     cat <<HELPEOF
 aether rescue image — network hook
-提供 Intel/Realtek/Broadcom + virtio/vmxnet3/Hyper-V 的 NIC 驱动模块，
-让 rescue 模式可以用 udhcpc/ifconfig/netup 配置有线网络，拿到 IP/DHCP 后
-即可用 ifconfig/udhcpc 或 telnetd 走进远程救援通道（默认开 telnetd :23，无认证）。
-静态 IP 场景：直接在 rescue shell 里 'ifconfig eth0 x.y.z.w/prefix'；
-DHCP 场景：'udhcpc eth0' 或者直接 'netup'（自动找第一个非 lo 网卡）。
-救援 shell 本身不依赖此 hook；/dev/ttyS0 串口控制台始终可用。
+Provides Intel/Realtek/Broadcom + virtio/vmxnet3/Hyper-V PCIe NICs plus
+common USB wired NIC drivers, so rescue mode can configure networking via
+udhcpc/ifconfig/netup. After obtaining an IP:
+reach the remote rescue channel with ifconfig/udhcpc or telnetd (telnetd :23 on by default, no auth).
+Static IP: just run 'ifconfig eth0 x.y.z.w/prefix' in the rescue shell;
+DHCP: 'udhcpc eth0' or simply 'netup' (picks the first non-lo interface).
+The rescue shell itself does NOT depend on this hook; /dev/ttyS0 serial console always works.
 HELPEOF
 }
 

@@ -196,10 +196,33 @@ out:
     }
 }
 
+static const char *env_get(char **envp, const char *name)
+{
+    size_t nlen = 0;
+    while (name[nlen]) nlen++;
+    if (envp) {
+        for (size_t i = 0; envp[i]; i++) {
+            const char *e = envp[i];
+            size_t j = 0;
+            while (name[j] && e[j] == name[j]) j++;
+            if (name[j] == '\0' && e[j] == '=') return e + j + 1;
+        }
+    }
+    return 0;
+}
+
 static int builtin_exit(int argc, char **argv, char **envp)
 {
     unsigned long long code = 0;
-    (void)envp;
+    /* init 救援环境（PID 1 启动时 spawn 的 rescue shell）：`exit` 等价 continue boot。
+     * 其他 shell（telnetd/普通 spawn）：保持 POSIX exit 语义。 */
+    if (argc == 1) {
+        const char *mode = env_get(envp, "AETHER_INIT");
+        if (mode && aether_streq(mode, "rescue")) {
+            elog_info("init: exit requested — continuing boot (same as rescue-boot)");
+            return aether_cmd_rescue_boot(1, (char *[]){ (char *)"rescue-boot", 0 }, envp);
+        }
+    }
     if (argc >= 2) {
         if (parse_num(argv[1], &code) != 0) {
             elog_err("exit: %s: numeric argument required", argv[1]);
@@ -563,7 +586,7 @@ static int builtin_syscall(int argc, char **argv, char **envp)
     (void)envp;
     if (argc < 2) {
         elog_info("usage: syscall <nr> [arg0 ... arg5]");
-        elog_info("raw syscall for debugging; numbers are arch-specific. 日常修复不要用它");
+        elog_info("raw syscall for debugging; numbers are arch-specific. Do not use for routine work.");
         return 0;
     }
     unsigned long long nr, a[6] = {0, 0, 0, 0, 0, 0};
@@ -602,7 +625,7 @@ static int builtin_switch_root(int argc, char **argv, char **envp)
         }
     }
 
-    elog_info("switch_root 是不可逆操作：这将切换到 %s 并执行 %s，当前救援环境将丢失。",
+    elog_info("switch_root is irreversible: switching to %s and executing %s, the current rescue environment will be lost.",
               newroot, init);
     if (!aether_ask("Type YES to continue: ", "YES")) {
         elog_err("switch_root: aborted");
@@ -654,7 +677,7 @@ static int builtin_switch_root(int argc, char **argv, char **envp)
 static int builtin_jobs(int argc, char **argv, char **envp)
 {
     (void)argc; (void)argv; (void)envp;
-    if (!shell_jobs_interactive()) { elog_err("jobs: 仅交互模式"); return 1; }
+    if (!shell_jobs_interactive()) { elog_err("jobs: interactive mode only"); return 1; }
     shell_job_list_print();
     return 0;
 }
@@ -662,15 +685,15 @@ static int builtin_jobs(int argc, char **argv, char **envp)
 static int builtin_fg(int argc, char **argv, char **envp)
 {
     (void)envp;
-    if (!shell_jobs_interactive()) { elog_err("fg: 仅交互模式"); return 1; }
+    if (!shell_jobs_interactive()) { elog_err("fg: interactive mode only"); return 1; }
     shell_job_t *j;
     if (argc > 1) {
         int id = (int)aether_atol(argv[1]);
         j = shell_job_find(id);
-        if (!j) { elog_err("fg: 没有作业 %d", id); return 1; }
+        if (!j) { elog_err("fg: no job %d", id); return 1; }
     } else {
         j = shell_job_latest();
-        if (!j) { elog_err("fg: 没有作业"); return 1; }
+        if (!j) { elog_err("fg: no jobs"); return 1; }
     }
     return shell_job_continue_fg(j) == -2 ? 0 : 0;
 }
@@ -678,15 +701,15 @@ static int builtin_fg(int argc, char **argv, char **envp)
 static int builtin_bg(int argc, char **argv, char **envp)
 {
     (void)envp;
-    if (!shell_jobs_interactive()) { elog_err("bg: 仅交互模式"); return 1; }
+    if (!shell_jobs_interactive()) { elog_err("bg: interactive mode only"); return 1; }
     shell_job_t *j;
     if (argc > 1) {
         int id = (int)aether_atol(argv[1]);
         j = shell_job_find(id);
-        if (!j) { elog_err("bg: 没有作业 %d", id); return 1; }
+        if (!j) { elog_err("bg: no job %d", id); return 1; }
     } else {
         j = shell_job_latest();
-        if (!j) { elog_err("bg: 没有作业"); return 1; }
+        if (!j) { elog_err("bg: no jobs"); return 1; }
     }
     shell_job_continue_bg(j);
     elog_info("[%d] %s &", j->id, j->cmdline);
@@ -699,25 +722,25 @@ static const shell_builtin_t builtins[] = {
     { ":",           builtin_true,    1, "true" },
     { "true",        builtin_true,    1, "true" },
     { "false",       builtin_false,   1, "false" },
-    { "cd",          builtin_cd,      1, "切换工作目录" },
-    { "exit",        builtin_exit,    1, "退出 shell" },
-    { "exec",        builtin_exec,    1, "以命令替换当前进程" },
-    { "echo",        builtin_echo,    0, "打印参数" },
-    { "cat",         builtin_cat,     0, "输出文件内容" },
-    { "pwd",         builtin_pwd,     0, "打印工作目录" },
-    { "[",           builtin_bracket, 0, "test 的括号形式" },
-    { "test",        builtin_test,    0, "条件测试（-e -f -d -r -w -x -s, =, !=, -eq...）" },
-    { "mount",       builtin_mount,   0, "挂载（-t -o bind/remount/ro/rw...）/ 不带参数列出 /proc/mounts" },
-    { "umount",      builtin_umount,  0, "卸载" },
-    { "chroot",      builtin_chroot,  0, "chroot 进目标根（自动绑定 /proc /sys /dev，SYSTEMD_OFFLINE=1）" },
-    { "switch_root", builtin_switch_root, 0, "切换到新根（不可逆，需 YES 确认）" },
-    { "syscall",     builtin_syscall, 0, "调试：syscall <nr> [args...]（编号随架构变化）" },
-    { "cmdline",     aether_cmd_cmdline, 0, "查看 /proc/cmdline" },
-    { "rescue-boot", aether_cmd_rescue_boot, 0, "重试启动（可指定覆盖 cmdline，如 root=/dev/x rw）" },
-    { "efi-cmdline", aether_cmd_efi_cmdline, 0, "查看/编辑 EFI 启动项的 cmdline（edit 需 root）" },
-    { "jobs",        builtin_jobs,    1, "列出停止/后台作业" },
-    { "fg",          builtin_fg,      1, "把作业调回前台：fg [id]" },
-    { "bg",          builtin_bg,      1, "继续停止的作业在后台：bg [id]" },
+    { "cd",          builtin_cd,      1, "change working directory" },
+    { "exit",        builtin_exit,    1, "exit shell" },
+    { "exec",        builtin_exec,    1, "replace current process with command" },
+    { "echo",        builtin_echo,    0, "print arguments" },
+    { "cat",         builtin_cat,     0, "print file content" },
+    { "pwd",         builtin_pwd,     0, "print working directory" },
+    { "[",           builtin_bracket, 0, "test in bracket form" },
+    { "test",        builtin_test,    0, "condition test (-e -f -d -r -w -x -s, =, !=, -eq...)" },
+    { "mount",       builtin_mount,   0, "mount (-t -o bind/remount/ro/rw...) / list /proc/mounts without args" },
+    { "umount",      builtin_umount,  0, "unmount" },
+    { "chroot",      builtin_chroot,  0, "chroot into target root (auto-bind /proc /sys /dev, SYSTEMD_OFFLINE=1)" },
+    { "switch_root", builtin_switch_root, 0, "switch to new root (irreversible, needs YES confirmation)" },
+    { "syscall",     builtin_syscall, 0, "debug: syscall <nr> [args...] (numbers differ by arch)" },
+    { "cmdline",     aether_cmd_cmdline, 0, "show /proc/cmdline" },
+    { "rescue-boot", aether_cmd_rescue_boot, 0, "retry boot (can override cmdline, e.g. root=/dev/x rw)" },
+    { "efi-cmdline", aether_cmd_efi_cmdline, 0, "view/edit EFI boot entry cmdline (edit needs root)" },
+    { "jobs",        builtin_jobs,    1, "list stopped/background jobs" },
+    { "fg",          builtin_fg,      1, "bring job to foreground: fg [id]" },
+    { "bg",          builtin_bg,      1, "resume stopped job in background: bg [id]" },
 };
 #define N_BUILTINS (sizeof(builtins) / sizeof(builtins[0]))
 

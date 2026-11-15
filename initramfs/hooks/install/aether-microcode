@@ -28,7 +28,7 @@ build() {
     local arch vendor family model stepping
     arch="$(uname -m)"
     if [[ "$arch" != @(i?86|x86_64) ]]; then
-        warning "aether-microcode: 架构 '%s' 不支持，跳过" "$arch"
+        warning "aether-microcode: architecture '%s' not supported, skipping" "$arch"
         return
     fi
 
@@ -36,7 +36,7 @@ build() {
     local cpuinfo="${AETHER_MICROCODE_CPUINFO:-/proc/cpuinfo}"
     vendor="$(awk -F: '/^vendor_id/ {sub(/^[ \t]+/, "", $2); print $2; exit}' "$cpuinfo" 2>/dev/null)"
     if [[ -z "$vendor" ]]; then
-        warning "aether-microcode: 无法从 %s 读出 vendor_id，跳过" "$cpuinfo"
+        warning "aether-microcode: cannot read vendor_id from %s, skipping" "$cpuinfo"
         return
     fi
 
@@ -44,14 +44,14 @@ build() {
     model="$(awk  -F: '/^model[ \t]*:/ {sub(/^[ \t]+/, "", $2); print $2; exit}'  "$cpuinfo")"
     stepping="$(awk -F: '/^stepping[ \t]*:/ {sub(/^[ \t]+/, "", $2); print $2; exit}' "$cpuinfo")"
     [[ -z "$family" || -z "$model" ]] && {
-        warning "aether-microcode: 读不出 family/model，跳过"
+        warning "aether-microcode: cannot read family/model, skipping"
         return
     }
 
     case "$vendor" in
         GenuineIntel) vendor=intel; ucode_img='intel-ucode.img';;
         AuthenticAMD) vendor=amd;   ucode_img='amd-ucode.img'  ;;
-        *)           warning "aether-microcode: 未知 CPU 厂商 '%s'，跳过" "$vendor"; return;;
+        *)           warning "aether-microcode: unknown CPU vendor '%s', skipping" "$vendor"; return;;
     esac
 
     # ---- 1) 如果有 /usr/lib/firmware/{intel,amd}-ucode/ 拆散文件：直接按主机 CPU 匹配挑出 ---
@@ -64,14 +64,14 @@ build() {
         aether_microcode_from_img "/boot/${ucode_img}" "$vendor" "$family" "$model" "$stepping" && return
     fi
 
-    warning "aether-microcode: 本机没有可用微码（firmware 目录及 /boot/${ucode_img} 都不存在）"
+    warning "aether-microcode: no microcode available for this machine (neither firmware dir nor /boot/${ucode_img})"
 }
 
 help() {
     cat <<HELPEOF
 aether rescue image — CPU microcode pruning hook
-只为本机 CPU 挑出对应的 microcode 片段（CPUID 匹配 family+model），
-其他平台的 microcode 一律丢掉——image 不再包含与救援机器无关的微码。
+Selects only the microcode for THIS CPU (CPUID family/model match),
+drops all microcode for other platforms -- image no longer carries microcode irrelevant to this rescue machine.
 HELPEOF
 }
 
@@ -88,14 +88,14 @@ aether_microcode_from_firmware() {
 
         if (( ${#candidates[@]} == 0 )) && [[ "${AETHER_MICROCODE_KEEP_ALL:-}" != 1 ]]; then
             # 任何一个 INTEL 段匹配不到 ⇒整个 Intel 微码在本机都没用，直接不加
-            warning "aether-microcode: 本机 CPU (family=$family model=$model stepping=$stepping) 在 $fw_dir 中没有匹配微码"
+            warning "aether-microcode: CPU (family=$family model=$model stepping=$stepping) has no matching microcode in $fw_dir"
             return 0
         fi
     else
         local fam_name="$(printf 'fam%xh' "$family")"
         mapfile -t candidates < <(LC_ALL=C.UTF-8 find "$fw_dir" -maxdepth 1 -name 'microcode_amd*.bin' 2>/dev/null)
         if (( ${#candidates[@]} == 0 )); then
-            warning "aether-microcode: $fw_dir 为空，跳过"
+            warning "aether-microcode: $fw_dir is empty, skipping"
             return 0
         fi
     fi
@@ -126,7 +126,7 @@ aether_microcode_from_img() {
     fi
 
     if [[ ! -s "$tmp_bin" ]]; then
-        warning "aether-microcode: $img 中没有 early file"
+        warning "aether-microcode: no early file in $img"
         rm -f "$tmp_bin" "$tmp_out"; return 0
     fi
 
@@ -205,7 +205,7 @@ with open(outp, 'wb') as f:
 PY
 
     if [[ ! -s "$tmp_out" ]]; then
-        warning "aether-microcode: 本机 (family=$family model=$model) 在 /boot/$ucode_img 中没有匹配微码"
+        warning "aether-microcode: machine (family=$family model=$model) has no matching microcode in /boot/$ucode_img"
         rm -f "$tmp_bin" "$tmp_out"; return 0
     fi
 

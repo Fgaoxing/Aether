@@ -1,7 +1,7 @@
 /*
- * ps.c — 进程列表（§12.5）
+ * ps.c — process list（§12.5）
  * 读 /proc/[pid]/stat + /proc/[pid]/comm；/proc 未挂载时给出 mount 提示。
- * 顺序按 getdents64 返回顺序（v1 不排序）。
+ * 顺序按 getdents64 返回顺序（v1 不sort）。
  */
 #include <stddef.h>
 
@@ -97,7 +97,7 @@ int tool_ps(int argc, char **argv, char **envp)
 
     long fd = sys_open("/proc", O_RDONLY | O_DIRECTORY, 0);
     if (AETHER_IS_ERR(fd)) {
-        elog_err("ps: cannot read /proc (%d). 试试: mount -t proc proc /proc", AETHER_ERR_CODE(fd));
+        elog_err("ps: cannot read /proc (%d). Try: mount -t proc proc /proc", AETHER_ERR_CODE(fd));
         return 1;
     }
     {

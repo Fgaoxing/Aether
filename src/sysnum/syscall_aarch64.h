@@ -75,6 +75,7 @@
 #define __NR_sendto          206
 #define __NR_reboot          142
 #define __NR_finit_module    273
+#define __NR_setsid         157
 #define __NR_init_module     105
 
 #endif /* AETHER_SYSNUM_AARCH64_H */

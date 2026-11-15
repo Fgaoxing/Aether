@@ -192,7 +192,7 @@ static void net_print_iface(int fd, const char *name)
     if (net_ioctl_ifreq(fd, SIOCGIFFLAGS, &ifr) == 0) flags = ifr.u.flags;
 
     unsigned char hw[6] = {0};
-    if (net_ioctl_ifreq(fd, SIOCGIFHWADDR, &ifr) == 0) for (int i = 0; i < 6; i++) hw[i] = ifr.u.hw.addr[i];
+    if (net_ioctl_ifreq(fd, SIOCGIFHWADDR, &ifr) == 0) for (int i = 0; i < 6; i++) hw[i] = ifr.u.sa.data[i];
     int mtu = 0;
     if (net_ioctl_ifreq(fd, SIOCGIFMTU, &ifr) == 0) mtu = ifr.u.mtu;
 
@@ -283,10 +283,10 @@ int tool_ifconfig(int argc, char **argv, char **envp)
     (void)envp;
     if (argc == 1 || (argc == 2 && (aether_streq(argv[1], "-a") || aether_streq(argv[1], "-l")))) {
         int fd = (int)sys_socket(AF_INET, SOCK_DGRAM, 0);
-        if (AETHER_IS_ERR((long)fd)) { elog_err("ifconfig: socket 失败"); return 1; }
+        if (AETHER_IS_ERR((long)fd)) { elog_err("ifconfig: socket failed"); return 1; }
         char names[NET_MAX_IFACES][16];
         int n = net_list_ifaces(names, NET_MAX_IFACES);
-        if (n == 0) elog_info("ifconfig: 未发现网络接口（或 /sys/class/net 未挂载）");
+        if (n == 0) elog_info("ifconfig: no network interfaces found (or /sys/class/net not mounted)");
         for (int i = 0; i < n; i++) net_print_iface(fd, names[i]);
         sys_close(fd);
         return 0;
@@ -294,7 +294,7 @@ int tool_ifconfig(int argc, char **argv, char **envp)
 
     const char *iface = argv[1];
     int fd = (int)sys_socket(AF_INET, SOCK_DGRAM, 0);
-    if (AETHER_IS_ERR((long)fd)) { elog_err("ifconfig: socket 失败"); return 1; }
+    if (AETHER_IS_ERR((long)fd)) { elog_err("ifconfig: socket failed"); return 1; }
 
     /* ifconfig <iface> */
     if (argc == 2) { net_print_iface(fd, iface); sys_close(fd); return 0; }
@@ -302,7 +302,7 @@ int tool_ifconfig(int argc, char **argv, char **envp)
     /* ifconfig <iface> up|down */
     if (argc == 3 && (aether_streq(argv[2], "up") || aether_streq(argv[2], "down"))) {
         int on = aether_streq(argv[2], "up");
-        if (net_set_flags(fd, iface, IFF_UP, on) != 0) { elog_err("ifconfig: %s %s 失败（权限不足？）", iface, on ? "up" : "down"); sys_close(fd); return 1; }
+        if (net_set_flags(fd, iface, IFF_UP, on) != 0) { elog_err("ifconfig: %s %s failed (permission denied?)", iface, on ? "up" : "down"); sys_close(fd); return 1; }
         sys_close(fd);
         elog_info("ifconfig: %s %s", iface, on ? "up" : "down");
         return 0;
@@ -330,24 +330,24 @@ int tool_ifconfig(int argc, char **argv, char **envp)
         const char *end = slash ? slash : spec + net_strlen(spec);
         while (spec + ii < end && ii + 1 < sizeof(ibuf)) { ibuf[ii] = spec[ii]; ii++; }
         ibuf[ii] = '\0';
-        if (net_aton(ibuf, ip) != 0) { elog_err("ifconfig: 无效地址 '%s'", spec); sys_close(fd); return 2; }
+        if (net_aton(ibuf, ip) != 0) { elog_err("ifconfig: invalid address '%s'", spec); sys_close(fd); return 2; }
         if (slash) {
             int prefix = (int)aether_atol(slash + 1);
-            if (prefix < 0 || prefix > 32) { elog_err("ifconfig: 无效前缀 '%s'", slash); sys_close(fd); return 2; }
+            if (prefix < 0 || prefix > 32) { elog_err("ifconfig: invalid prefix '%s'", slash); sys_close(fd); return 2; }
             net_mask_from_prefix(prefix, mask);
             have_mask = 1;
         }
         /* netmask <mask> */
         if (argc >= 5 && aether_streq(argv[3], "netmask")) {
-            if (net_mask_from_str(argv[4], mask) != 0) { elog_err("ifconfig: 无效掩码 '%s'", argv[4]); sys_close(fd); return 2; }
+            if (net_mask_from_str(argv[4], mask) != 0) { elog_err("ifconfig: invalid netmask '%s'", argv[4]); sys_close(fd); return 2; }
             have_mask = 1;
         }
-        if (net_set_flags(fd, iface, IFF_UP, 1) != 0) { elog_err("ifconfig: %s up 失败（权限不足？）", iface); sys_close(fd); return 1; }
+        if (net_set_flags(fd, iface, IFF_UP, 1) != 0) { elog_err("ifconfig: %s up failed (permission denied?)", iface); sys_close(fd); return 1; }
         if (net_set_ifaddr(fd, iface, ip, have_mask ? mask : 0) != 0) {
             char a[16], m[16];
             net_ntoa(ip, a, sizeof(a));
             sys_close(fd);
-            elog_err("ifconfig: 设置 %s 地址 %s 失败（权限不足？需要 root/CAP_NET_ADMIN）", iface, a);
+            elog_err("ifconfig: set %s address %s failed (permission denied? need root/CAP_NET_ADMIN)", iface, a);
             return 1;
         }
         char a[16], m[16];
@@ -395,7 +395,7 @@ static int net_if_hwaddr(int fd, const char *iface, unsigned char mac[6])
     net_ifreq_t ifr;
     net_strcpy(ifr.name, iface, sizeof(ifr.name));
     if (net_ioctl_ifreq(fd, SIOCGIFHWADDR, &ifr) != 0) return -1;
-    for (int i = 0; i < 6; i++) mac[i] = ifr.u.hw.addr[i];
+    for (int i = 0; i < 6; i++) mac[i] = ifr.u.sa.data[i];
     return 0;
 }
 
@@ -427,8 +427,7 @@ static size_t dhcp_build_packet(unsigned char *pkt, size_t cap, unsigned long lo
     /* magic cookie */
     pkt[n++] = 0x63; pkt[n++] = 0x82; pkt[n++] = 0x53; pkt[n++] = 0x63;
     /* options */
-    unsigned char one = 1;
-    n = dhcp_put_tlv(pkt, n, DHCP_TAG_MSGTYPE, &one, 1);
+    n = dhcp_put_tlv(pkt, n, DHCP_TAG_MSGTYPE, &msgtype, 1);
     unsigned char host[] = "aether";
     n = dhcp_put_tlv(pkt, n, DHCP_TAG_HOSTNAME, host, (unsigned char)(sizeof(host) - 1));
     unsigned char params[] = { DHCP_TAG_SUBNET, DHCP_TAG_ROUTER, DHCP_TAG_DNS, DHCP_TAG_DOMAIN, DHCP_TAG_LEASE };
@@ -447,7 +446,7 @@ static int dhcp_parse_reply(const unsigned char *pkt, size_t n, unsigned long lo
     if (pkt[0] != DHCP_BOOTREPLY) return 1;
     unsigned long long xid = 0;
     for (int i = 0; i < 4; i++) xid = (xid << 8) | pkt[4 + i];
-    if (xid != want_xid) return 1;
+    if ((xid & 0xffffffffULL) != (want_xid & 0xffffffffULL)) return 1;
     if (pkt[236] != 0x63 || pkt[237] != 0x82 || pkt[238] != 0x53 || pkt[239] != 0x63) return 1;
 
     for (int i = 0; i < 4; i++) out_ip[i] = pkt[16 + i]; /* yiaddr */
@@ -483,13 +482,13 @@ static int dhcp_apply_lease(int fd, const char *iface,
                             const unsigned char gw[4], const unsigned char dns[3][4], int dns_n)
 {
     if (net_set_flags(fd, iface, IFF_UP, 1) != 0) {
-        elog_err("udhcpc: %s up 失败（权限不足？）", iface);
+        elog_err("udhcpc: %s up failed (permission denied?)", iface);
         return -1;
     }
     if (net_set_ifaddr(fd, iface, ip, netmask) != 0) {
         char a[16];
         net_ntoa(ip, a, sizeof(a));
-        elog_err("udhcpc: 配置 %s 地址 %s 失败（权限不足？需要 root/CAP_NET_ADMIN）", iface, a);
+        elog_err("udhcpc: configure %s address %s failed (permission denied? need root/CAP_NET_ADMIN)", iface, a);
         return -1;
     }
 #if defined(__LP64__)
@@ -525,7 +524,7 @@ static int dhcp_apply_lease(int fd, const char *iface,
         rt[NET_RT_OFF_FLAGS] = (unsigned char)(flags & 0xff);
         rt[NET_RT_OFF_FLAGS + 1] = (unsigned char)(flags >> 8);
         long r = sys_ioctl(fd, SIOCADDRT, (unsigned long)rt);
-        if (AETHER_IS_ERR(r)) elog_info("udhcpc: 默认路由添加失败（%d）——如需联网请手动 route add", AETHER_ERR_CODE(r));
+        if (AETHER_IS_ERR(r)) elog_info("udhcpc: default route add failed (%d) -- add one manually with route add", AETHER_ERR_CODE(r));
     }
     /* /etc/resolv.conf（失败不致命） */
     if (dns_n > 0) {
@@ -544,7 +543,7 @@ static int dhcp_apply_lease(int fd, const char *iface,
             }
             sys_close(rfd);
         } else {
-            elog_info("udhcpc: 无法写 /etc/resolv.conf（非致命，DNS 未配置）");
+            elog_info("udhcpc: cannot write /etc/resolv.conf (non-fatal, DNS not configured)");
         }
     }
     return 0;
@@ -565,11 +564,11 @@ static int dhcp_configure(const char *iface, int quiet)
 static int dhcp_configure_opts(const char *iface, int quiet, int retries, int timeout)
 {
     int fd = (int)sys_socket(AF_INET, SOCK_DGRAM, 0);
-    if (AETHER_IS_ERR((long)fd)) { if (!quiet) elog_err("udhcpc: socket 失败（%d）", AETHER_ERR_CODE((long)fd)); return 1; }
+    if (AETHER_IS_ERR((long)fd)) { if (!quiet) elog_err("udhcpc: socket failed (%d)", AETHER_ERR_CODE((long)fd)); return 1; }
 
     /* 先把接口 IFF_UP——否则 DISCOVER 走不出本机，内核直接 ENETUNREACH（101） */
     if (net_set_flags(fd, iface, IFF_UP, 1) != 0) {
-        if (!quiet) elog_err("udhcpc: 接口 %s 起不来（权限不足？）", iface);
+        if (!quiet) elog_err("udhcpc: interface %s cannot be brought up (permission denied?)", iface);
         sys_close(fd);
         return 1;
     }
@@ -586,7 +585,7 @@ static int dhcp_configure_opts(const char *iface, int quiet, int retries, int ti
     sys_setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
 
     unsigned char mac[6];
-    if (net_if_hwaddr(fd, iface, mac) != 0) { if (!quiet) elog_err("udhcpc: 无法读 %s 的 MAC（接口存在吗？）", iface); sys_close(fd); return 1; }
+    if (net_if_hwaddr(fd, iface, mac) != 0) { if (!quiet) elog_err("udhcpc: cannot read MAC of %s (does the interface exist?)", iface); sys_close(fd); return 1; }
 
     unsigned long long xid = 0x12345678ULL;
     {
@@ -606,7 +605,7 @@ static int dhcp_configure_opts(const char *iface, int quiet, int retries, int ti
     unsigned char any[4] = {0,0,0,0};
     net_make_sockaddr_in(&laddr, any, 0x4400); /* htons(68) */
     if (sys_bind(fd, &laddr, sizeof(laddr)) != 0) {
-        if (!quiet) elog_err("udhcpc: bind :68 失败（%d）——需要 root", AETHER_ERR_CODE(sys_bind(fd, &laddr, sizeof(laddr))));
+        if (!quiet) elog_err("udhcpc: bind :68 failed (%d) -- need root", AETHER_ERR_CODE(sys_bind(fd, &laddr, sizeof(laddr))));
         sys_close(fd);
         return 1;
     }
@@ -626,7 +625,7 @@ static int dhcp_configure_opts(const char *iface, int quiet, int retries, int ti
         size_t n = dhcp_build_packet(pkt, sizeof(pkt), xid, mac, DHCP_DISCOVER);
         if (n == 0) { sys_close(fd); return 1; }
         long s = sys_sendto(fd, pkt, n, 0, &bcast, sizeof(bcast));
-        if (AETHER_IS_ERR(s)) { if (!quiet) elog_err("udhcpc: 发送 DISCOVER 失败（%d）", AETHER_ERR_CODE(s)); sys_close(fd); return 1; }
+        if (AETHER_IS_ERR(s)) { if (!quiet) elog_err("udhcpc: send DISCOVER failed (%d)", AETHER_ERR_CODE(s)); sys_close(fd); return 1; }
 
         long r = sys_recvfrom(fd, pkt, sizeof(pkt), 0, 0, 0);
         if (AETHER_IS_ERR(r) || r == 0) continue; /* 超时，重试 */
@@ -634,11 +633,11 @@ static int dhcp_configure_opts(const char *iface, int quiet, int retries, int ti
         if (dhcp_parse_reply(pkt, (size_t)r, xid, lease_ip, lease_mask, lease_gw, lease_dns, &dns_n, &msgtype, server_id) == 0 && msgtype == DHCP_OFFER) {
             char a[16];
             net_ntoa(lease_ip, a, sizeof(a));
-            if (!quiet) elog_info("udhcpc: 收到 OFFER：%s", a);
+            if (!quiet) elog_info("udhcpc: got OFFER: %s", a);
             goto have_offer;
         }
     }
-    if (!quiet) elog_err("udhcpc: 未收到 DHCP OFFER（网络无 DHCP 服务或接口不通？）");
+    if (!quiet) elog_err("udhcpc: no DHCP OFFER received (no DHCP server on network or interface down?)");
     sys_close(fd);
     return 1;
 
@@ -660,12 +659,12 @@ have_offer:
         m = dhcp_put_tlv(req, m, DHCP_TAG_SERVERID, sid_tlv, 4);
         req[m++] = 255;
         long s = sys_sendto(fd, req, m, 0, &bcast, sizeof(bcast));
-        if (AETHER_IS_ERR(s)) { if (!quiet) elog_err("udhcpc: 发送 REQUEST 失败（%d）", AETHER_ERR_CODE(s)); sys_close(fd); return 1; }
+        if (AETHER_IS_ERR(s)) { if (!quiet) elog_err("udhcpc: send REQUEST failed (%d)", AETHER_ERR_CODE(s)); sys_close(fd); return 1; }
         long r = sys_recvfrom(fd, pkt, sizeof(pkt), 0, 0, 0);
-        if (AETHER_IS_ERR(r) || r == 0) { if (!quiet) elog_err("udhcpc: 未收到 DHCP ACK"); sys_close(fd); return 1; }
+        if (AETHER_IS_ERR(r) || r == 0) { if (!quiet) elog_err("udhcpc: no DHCP ACK received"); sys_close(fd); return 1; }
         unsigned char msgtype = 0;
         if (dhcp_parse_reply(pkt, (size_t)r, xid, lease_ip, lease_mask, lease_gw, lease_dns, &dns_n, &msgtype, server_id) != 0 || msgtype != DHCP_ACK) {
-            if (!quiet) elog_err("udhcpc: 未收到 DHCP ACK（type=%d）", msgtype);
+            if (!quiet) elog_err("udhcpc: no DHCP ACK received（type=%d）", msgtype);
             sys_close(fd);
             return 1;
         }
@@ -683,7 +682,7 @@ have_offer:
         net_ntoa(lease_ip, a, sizeof(a));
         net_ntoa(lease_mask, m, sizeof(m));
         net_ntoa(lease_gw, g, sizeof(g));
-        elog_info("udhcpc: 获得地址 %s，掩码 %s，网关 %s%s", a, m, g, dns_n > 0 ? "，DNS 已写入 /etc/resolv.conf" : "");
+        elog_info("udhcpc: got address %s, netmask %s, gateway %s%s", a, m, g, dns_n > 0 ? ", DNS written to /etc/resolv.conf" : "");
     }
     sys_close(fd);
     return 0;
@@ -700,7 +699,7 @@ int tool_udhcpc(int argc, char **argv, char **envp)
         else if (aether_streq(a, "-t") && i + 1 < argc) retries = (int)aether_atol(argv[++i]);
         else if (aether_streq(a, "-T") && i + 1 < argc) timeout = (int)aether_atol(argv[++i]);
         else if (aether_streq(a, "-n")) { /* 保持失败即返回，已有语义 */ }
-        else if (a[0] == '-' && a[1]) { elog_err("udhcpc: unknown option '%s'（支持：-i IFACE, -t N 重试次数, -T N 超时秒数, -n）", a); return 2; }
+        else if (a[0] == '-' && a[1]) { elog_err("udhcpc: unknown option '%s' (supported: -i IFACE, -t N retries, -T N timeout sec, -n)", a); return 2; }
         else { iface = a; }
     }
     if (!iface) {
@@ -709,7 +708,7 @@ int tool_udhcpc(int argc, char **argv, char **envp)
         int n = net_list_ifaces(names, NET_MAX_IFACES);
         for (int i = 0; i < n; i++)
             if (!aether_streq(names[i], "lo")) { iface = names[i]; break; }
-        if (!iface) { elog_err("udhcpc: 未找到可用网络接口（需要 -i <iface>）"); return 1; }
+        if (!iface) { elog_err("udhcpc: no usable network interface found (need -i <iface>)"); return 1; }
     }
     return dhcp_configure_opts(iface, 0, retries, timeout);
 }
@@ -718,13 +717,26 @@ int tool_udhcpc(int argc, char **argv, char **envp)
 /* IAC 过滤在 shell_read_fd0_line 里（aether_telnet_mode=1 时启用） */
 
 static volatile int telnetd_stop;
-static void telnetd_handler(int sig) { (void)sig; telnetd_stop = 1; }
+static void telnetd_handler(int sig) { (void)sig; elog_info("telnetd: stopped (SIGINT)"); aether_exit(0); }
+
+/* 收割已退出的 telnet 子进程，避免僵尸（SIGCHLD 打断 accept 也安全：循环里对 EINTR 已处理） */
+static void telnetd_reap(int sig)
+{
+    (void)sig;
+    int status = 0;
+    while (sys_wait4(-1, &status, 1 /*WNOHANG*/, 0) > 0) { }
+}
 
 /* 每个连接 fork 一个子进程跑 rescue shell（不经 pty，行模式 + IAC 过滤） */
 static void telnetd_handle_conn(int conn, char **envp)
 {
     int pid = (int)sys_fork();
-    if (pid != 0) return; /* 父进程立即返回 */
+    if (pid != 0) {
+        /* 父进程必须关掉自己这份 conn——否则子进程退出（Ctrl-C / 客户端断开）后
+         * 客户端永远等不到 EOF/RST */
+        sys_close(conn);
+        return;
+    }
 
     /* 子进程：socket 绑定到 0/1/2 */
     sys_dup2(conn, 0);
@@ -733,7 +745,7 @@ static void telnetd_handle_conn(int conn, char **envp)
     if (conn > 2) sys_close(conn);
     aether_telnet_mode = 1;
 
-    elog_info("telnetd: 连接建立，启动 rescue shell（无认证）");
+    elog_info("telnetd: connection established, starting rescue shell (no auth)");
     shell_main(1, (char *[]){ (char *)"aether", 0 }, envp);
     aether_exit(0);
 }
@@ -741,7 +753,7 @@ static void telnetd_handle_conn(int conn, char **envp)
 static int telnetd_serve(int port, char **envp)
 {
     int fd = (int)sys_socket(AF_INET, SOCK_STREAM, 0);
-    if (AETHER_IS_ERR((long)fd)) { elog_err("telnetd: socket 失败（%d）", AETHER_ERR_CODE((long)fd)); return 1; }
+    if (AETHER_IS_ERR((long)fd)) { elog_err("telnetd: socket failed (%d)", AETHER_ERR_CODE((long)fd)); return 1; }
     int one = 1;
     sys_setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
 
@@ -750,18 +762,19 @@ static int telnetd_serve(int port, char **envp)
     unsigned short port_be = (unsigned short)(((unsigned)port >> 8) | ((unsigned)port << 8));
     net_make_sockaddr_in(&sa, any, port_be);
     if (sys_bind(fd, &sa, sizeof(sa)) != 0) {
-        elog_err("telnetd: bind :%d 失败（%d）——端口被占用或权限不足（需要 root）", port, AETHER_ERR_CODE(sys_bind(fd, &sa, sizeof(sa))));
+        elog_err("telnetd: bind :%d failed (%d) -- port in use or permission denied (need root)", port, AETHER_ERR_CODE(sys_bind(fd, &sa, sizeof(sa))));
         sys_close(fd);
         return 1;
     }
     if (sys_listen(fd, 4) != 0) {
-        elog_err("telnetd: listen 失败（%d）", AETHER_ERR_CODE(sys_listen(fd, 4)));
+        elog_err("telnetd: listen failed (%d)", AETHER_ERR_CODE(sys_listen(fd, 4)));
         sys_close(fd);
         return 1;
     }
     aether_signal(SIGINT, telnetd_handler);
     aether_signal(SIGTERM, telnetd_handler);
-    elog_info("telnetd: 监听 0.0.0.0:%d（rescue shell，无认证；Ctrl-C 停止）", port);
+    aether_signal(SIGCHLD, telnetd_reap);
+    elog_info("telnetd: listening on 0.0.0.0:%d (rescue shell, no auth; Ctrl-C to stop)", port);
 
     while (!telnetd_stop) {
         net_sockaddr_in_t peer;
@@ -773,14 +786,14 @@ static int telnetd_serve(int port, char **envp)
         }
         char peer_ip[16];
         net_ntoa(peer.sin_addr, peer_ip, sizeof(peer_ip));
-        elog_info("telnetd: 连接来自 %s", peer_ip);
+        elog_info("telnetd: connection from %s", peer_ip);
         telnetd_handle_conn(conn, envp);
         /* 收割已退出的子进程，避免僵尸 */
         int status = 0;
         while (sys_wait4(-1, &status, 1 /*WNOHANG*/, 0) > 0) { }
     }
     sys_close(fd);
-    elog_info("telnetd: 已停止");
+    elog_info("telnetd: stopped");
     return 0;
 }
 
@@ -793,7 +806,7 @@ int tool_telnetd(int argc, char **argv, char **envp)
         else if (a[0] == '-' && a[1]) { elog_err("telnetd: unknown option '%s'", a); return 2; }
         else { port = (int)aether_atol(a); }
     }
-    if (port < 1 || port > 65535) { elog_err("telnetd: 无效端口"); return 2; }
+    if (port < 1 || port > 65535) { elog_err("telnetd: invalid port"); return 2; }
     return telnetd_serve(port, envp);
 }
 
@@ -836,15 +849,15 @@ int tool_netup(int argc, char **argv, char **envp)
     char auto_iface[16];
     if (!iface) {
         if (netup_find_first_nonlo(auto_iface) != 0) {
-            elog_err("netup: 未发现非 loopback 网络接口");
+            elog_err("netup: no non-loopback network interface found");
             return 1;
         }
         iface = auto_iface;
     }
-    elog_info("netup: 使用接口 %s", iface);
-    elog_info("netup: 启动接口并请求 DHCP…");
+    elog_info("netup: using interface %s", iface);
+    elog_info("netup: bringing up interface and requesting DHCP...");
     if (dhcp_configure(iface, 0) != 0) {
-        elog_err("netup: DHCP 失败（无法联网）；接口 %s 已保留可用，请手动配置", iface);
+        elog_err("netup: DHCP failed (no network); interface %s left usable, configure manually", iface);
         return 1;
     }
     /* 后台启动 telnetd */
@@ -854,9 +867,9 @@ int tool_netup(int argc, char **argv, char **envp)
         aether_exit(0);
     }
     if (pid > 0)
-        elog_info("netup: telnetd 已启动（端口 23；无认证！仅限受信网络；Ctrl-C 停止 shell 不影响它）");
+        elog_info("netup: telnetd started (port 23; no auth! trusted networks only; Ctrl-C stops the shell, not it)");
     else
-        elog_err("netup: telnetd 启动失败（%d）", AETHER_ERR_CODE((long)pid));
+        elog_err("netup: telnetd failed to start (%d)", AETHER_ERR_CODE((long)pid));
     return 0;
 }
 
@@ -893,6 +906,9 @@ int net_rescue_auto_retry(char **envp)
             }
         }
     }
+    /* 常驻守护：持续监视 /sys/class/net，有非 lo 网卡 → 配置 + 起 telnetd。
+     * 重要：网卡热插（如 USB 网卡在救援中途插上）也能被自动检测。 */
+    int telnetd_started = 0;
     for (;;) {
         char iface[16];
         if (netup_find_first_nonlo(iface) != 0) {
@@ -907,18 +923,26 @@ int net_rescue_auto_retry(char **envp)
             have = iface_has_ipv4(fd, iface);
             sys_close(fd);
         }
-        if (have) return 0; /* 用户已手动配置或之前重试成功 */
-
-        if (dhcp_configure(iface, 1 /*quiet：静默重试，成功时由 udhcpc 打一行 */) == 0) {
+        if (!have) {
+            /* DHCP 成功后仅启动 telnetd 一次 */
+            if (dhcp_configure(iface, 1 /*quiet：静默重试，成功时由 udhcpc 打一行 */) == 0) {
+                elog_info("rescue: network configured (%s)", iface);
+                have = 1;
+            }
+        }
+        if (have && !telnetd_started) {
             int pid = (int)sys_fork();
             if (pid == 0) {
                 telnetd_serve(23, envp);
                 aether_exit(0);
             }
-            elog_info("rescue: 网络已配置（%s），telnetd 已启动（0.0.0.0:23，无认证）", iface);
-            return 0;
+            elog_info("rescue: telnetd started (0.0.0.0:23, no auth) — Ctrl-C in telnetd session exits the shell");
+            telnetd_started = 1;
         }
-        struct { long sec; long nsec; } ts = { 2, 0 };
+        /* 回收僵尸子进程（避免 pid 溢出） */
+        int st = 0;
+        while (sys_wait4(-1, &st, 1 /*WNOHANG*/, 0) > 0) { }
+        struct { long sec; long nsec; } ts = { 3, 0 };
         sys_nanosleep(&ts, 0);
     }
 }

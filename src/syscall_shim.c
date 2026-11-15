@@ -329,6 +329,11 @@ long sys_setpgid(int pid, int pgid)
     return syscall_nr(AETHER_NR(setpgid), (long)pid, (long)pgid, 0, 0, 0, 0);
 }
 
+long sys_setsid(void)
+{
+    return syscall_nr(AETHER_NR(setsid), 0, 0, 0, 0, 0, 0);
+}
+
 long sys_getpgid(int pid)
 {
     return syscall_nr(AETHER_NR(getpgid), (long)pid, 0, 0, 0, 0, 0);

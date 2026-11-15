@@ -34,7 +34,7 @@ build() {
     self_dir="$(dirname "${BASH_SOURCE[0]:-aether-hostdrv}")"
 
     if [[ ! -r "$alias_file" ]]; then
-        warning "aether-hostdrv: $alias_file 不可读，跳过侦测"
+        warning "aether-hostdrv: $alias_file not readable, skipping detection"
         return 0
     fi
 
@@ -55,7 +55,7 @@ build() {
                     "$self_dir/aether-keyboard" "$self_dir/aether-usb" "$self_dir/aether-network" 2>/dev/null \
                 | sed -E "s/add_module '//" | sort -u)"
     if [[ -z "$hookmods" ]]; then
-        warning "aether-hostdrv: 无法从兄弟 hook 读取模块清单（self_dir=$self_dir）——本 hook 不生效"
+        warning "aether-hostdrv: could not read module lists from sibling hooks (self_dir=$self_dir) -- this hook has no effect"
         return 1
     fi
     declare -A CAND=()
@@ -133,7 +133,7 @@ build() {
         list+=("$m")
         total=$((total + 1))
     done
-    quiet "aether-hostdrv: 通用集 $(echo "$hookmods" | wc -l) 个 → 保留 ${total} 个：${list[*]}"
+    quiet "aether-hostdrv: common set $(echo "$hookmods" | wc -l) modules -> kept ${total}: ${list[*]}"
     return 0
 }
 

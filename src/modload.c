@@ -86,7 +86,7 @@ static void collect_modules(const char *dir)
 static int fallback_load(void)
 {
     collect_modules("/lib/modules");
-    if (g_module_n == 0) { elog_info("modload: /lib/modules 中未找到模块文件"); return 0; }
+    if (g_module_n == 0) { elog_info("modload: no module files found under /lib/modules"); return 0; }
 
     int done[MODULE_MAX];
     for (int i = 0; i < MODULE_MAX; i++) done[i] = 0;
@@ -140,7 +140,7 @@ static int fallback_load(void)
 
     int failed = 0;
     for (int i = 0; i < g_module_n; i++) if (done[i] == 0) failed++;
-    elog_info("modload: 兜底扫描 %d 个模块 → %d 个已加载，%d 个失败（多遍重试）", g_module_n, loaded_total, failed);
+    elog_info("modload: fallback scan of %d modules -> %d loaded, %d failed (multiple passes)", g_module_n, loaded_total, failed);
     if (loaded_total) aether_uevent_pump(1500);
     return loaded_total;
 }
@@ -171,7 +171,7 @@ int aether_load_modules(void)
 
         long fd = sys_open(path, O_RDONLY, 0);
         if (AETHER_IS_ERR(fd)) {
-            elog_err("modload: 打开 %s 失败（%d）", path, AETHER_ERR_CODE(fd));
+            elog_err("modload: open %s failed (%d)", path, AETHER_ERR_CODE(fd));
             failed++;
             continue;
         }
@@ -180,15 +180,15 @@ int aether_load_modules(void)
         if (AETHER_IS_ERR(r)) {
             int e = AETHER_ERR_CODE(r);
             /* EEXIST（17）= 模块已内建/已加载：不是错 */
-            if (e == 17) elog_info("modload: %s 已加载（跳过）", path);
-            else { elog_err("modload: finit_module %s 失败（%d）", path, e); failed++; }
+            if (e == 17) elog_info("modload: %s already loaded (skip)", path);
+            else { elog_err("modload: finit_module %s failed (%d)", path, e); failed++; }
         } else {
             elog_info("modload: + %s", path);
             loaded++;
         }
     }
     if (loaded || failed)
-        elog_info("modload: %d 个模块已加载，%d 个失败", loaded, failed);
+        elog_info("modload: %d modules loaded, %d failed", loaded, failed);
     if (loaded)
         aether_uevent_pump(1500); /* 新设备节点落地 */
     return loaded;

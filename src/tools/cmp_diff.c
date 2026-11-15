@@ -1,7 +1,7 @@
 /*
  * cmp_diff.c — diff / join / split
  * diff: 行级 diff（公共前缀/后缀修剪 + 中段 LCS），输出 < / > 行
- * join: 按第一个字段合并（两个已按第一个字段排序的文件）
+ * join: 按第一个字段合并（两个已按第一个字段sort的文件）
  * split: 按行数切分
  */
 #include <stddef.h>

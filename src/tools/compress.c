@@ -784,7 +784,7 @@ static int zhuff_build(zhuff_t *h, const unsigned char *lengths, int nsym, int m
     if (mb == 0) return -1; /* 全零 */
     h->max_bits = max_bits > 0 ? max_bits : mb;
     if (h->max_bits > HUF_MAX_BITS) return -1;
-    /* ZSTD X1 填充顺序：从最长码开始，排序后直接查表解码 */
+    /* ZSTD X1 填充顺序：从最长码开始，sort后直接查表解码 */
     int pos = 0;
     for (int nb = h->max_bits; nb >= 1; nb--) {
         int span = 1 << (h->max_bits - nb);
@@ -832,7 +832,7 @@ static int weights_to_lengths(const unsigned char *weights, int nweights, unsign
     unsigned char lengths[257];
     for (int i = 0; i < nsym; i++)
         lengths[i] = all[i] == 0 ? 0 : (unsigned char)(max_bits + 1 - all[i]);
-    /* 排序（按 weight 升序，同 weight 保持自然序）—— canonical code 分配不需要，
+    /* sort（按 weight 升序，同 weight 保持自然序）—— canonical code 分配不需要，
        zhuff_build 只按 length 计数分配 offset 即可 */
     for (int i = 0; i < 257; i++) lengths_out[i] = lengths[i];
     return nsym;

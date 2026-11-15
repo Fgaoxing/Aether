@@ -19,6 +19,7 @@ typedef struct {
     int  rootwait;        /* rootwait 标志 */
     int  ro;              /* 只读根（ro 标志或 rootflags 含 ro） */
     int  noresume;        /* noresume：禁止休眠恢复 */
+    int  aether_rescue;   /* aether_rescue：确定性进入救援模式（不 boot，直接 rescue） */
 } aether_cmdline_t;
 
 /* 测试用：直接解析字符串 */
@@ -39,7 +40,7 @@ int aether_uevent_pump(int max_ms);
 /* PID 1 入口：挂载伪文件系统 → uevent 补齐 → cmdline → boot；失败进拯救 shell */
 int aether_init_main(char **envp);
 
-/* 拯救 shell 内置命令：cmdline / rescue-boot / efi-cmdline */
+/* 拯救 shell builtins:cmdline / rescue-boot / efi-cmdline */
 int aether_cmd_cmdline(int argc, char **argv, char **envp);
 int aether_cmd_rescue_boot(int argc, char **argv, char **envp);
 int aether_cmd_efi_cmdline(int argc, char **argv, char **envp);

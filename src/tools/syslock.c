@@ -109,8 +109,8 @@ static int do_reboot_cmd(const char *who, unsigned int cmd)
     long r = sys_reboot(RB_MAGIC, RB_MAGIC_2, cmd, 0);
     if (AETHER_IS_ERR(r)) {
         int e = AETHER_ERR_CODE(r);
-        if (e == 1) elog_err("%s: 权限不足（需要 root/CAP_SYS_BOOT）", who);
-        else elog_err("%s: reboot syscall 失败（%d）", who, e);
+        if (e == 1) elog_err("%s: permission denied (need root/CAP_SYS_BOOT)", who);
+        else elog_err("%s: reboot syscall failed (%d)", who, e);
         return 1;
     }
     /* 成功则不返回（init/kern 已开始关机/重启流程） */
@@ -123,11 +123,11 @@ int tool_reboot(int argc, char **argv, char **envp)
     for (int i = 1; i < argc; i++) {
         const char *a = argv[i];
         if (aether_streq(a, "-h") || aether_streq(a, "--help")) {
-            elog_info("usage: reboot   同步磁盘并重启系统（需要 root）");
+            elog_info("usage: reboot   sync and reboot (needs root)");
             return 0;
         } else { elog_err("reboot: unknown option '%s'", a); return 2; }
     }
-    elog_info("reboot: 同步并请求系统重启…");
+    elog_info("reboot: syncing and requesting system reboot...");
     return do_reboot_cmd("reboot", RB_AUTOBOOT);
 }
 
@@ -137,10 +137,10 @@ int tool_halt(int argc, char **argv, char **envp)
     for (int i = 1; i < argc; i++) {
         const char *a = argv[i];
         if (aether_streq(a, "-h") || aether_streq(a, "--help")) {
-            elog_info("usage: halt     同步磁盘并停机/断电（需要 root）");
+            elog_info("usage: halt     sync and halt/poweroff (needs root)");
             return 0;
         } else { elog_err("halt: unknown option '%s'", a); return 2; }
     }
-    elog_info("halt: 同步并请求系统停机…");
+    elog_info("halt: syncing and requesting system halt...");
     return do_reboot_cmd("halt", RB_HALT_POWEROFF);
 }

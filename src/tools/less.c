@@ -1,5 +1,5 @@
 /*
- * less.c — mini 分页器（§12.5）
+ * less.c — mini pager（§12.5）
  * less <file> 或 stdin：q 退出；↑↓ 逐行；空格/PgDn 下翻页；b/PgUp 上翻；g/G 首尾。
  * 不支持搜索/跳行（v1，见 §13 非目标）。
  * 内容全部读入后才进入交互；键盘从 /dev/tty 读（stdin 可能是管道）。
@@ -58,7 +58,7 @@ static void less_render(int top, int rows, int cols)
     if (v == 0) num[m++] = '0';
     while (v) { num[m++] = (char)('0' + (v % 10)); v /= 10; }
     while (m) st[d++] = num[--m];
-    const char *suf = "  (q 退出) \x1b[27m";
+    const char *suf = "  (q quit) \x1b[27m";
     for (size_t k = 0; suf[k]; k++) st[d++] = suf[k];
     st[d] = '\0';
     sys_write(1, st, d);
@@ -107,7 +107,7 @@ int tool_less(int argc, char **argv, char **envp)
     aether_tty_t tty;
     aether_signal(SIGINT, less_sigint_handler);
     if (tty_save(kbd, &tty) != 0 || tty_cbreak(kbd, &tty) != 0) {
-        elog_err("less: 需要 tty");
+        elog_err("less: needs a tty");
         return 1;
     }
 

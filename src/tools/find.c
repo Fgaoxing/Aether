@@ -1,5 +1,5 @@
 /*
- * find.c — find（递归查找文件）
+ * find.c — find（find files recursively）
  * find [path...] [-name glob] [-type f|d|l] [-maxdepth N]
  * 输出：每个匹配的路径一行（救援够用，不必与 GNU find 输出一致）
  */

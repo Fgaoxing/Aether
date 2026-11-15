@@ -217,7 +217,7 @@ static void ed_render(int rows, int cols)
     sys_write(1, "\x1b[7m", sizeof("\x1b[7m") - 1);
     char status[512];
     size_t d = 0;
-    const char *pre = ed_prompt ? " Save modified buffer? [y/n] " : " ^S 保存  ^X 退出  ";
+    const char *pre = ed_prompt ? " Save modified buffer? [y/n] " : " ^S save  ^X quit  ";
     for (size_t k = 0; pre[k] && d + 1 < sizeof(status); k++) status[d++] = pre[k];
     for (size_t k = 0; ed_path[k] && d + 1 < sizeof(status); k++) {
         unsigned char ch = (unsigned char)ed_path[k];
@@ -278,9 +278,9 @@ static int ed_run(void)
     aether_tty_t tty;
     aether_signal(SIGINT, ed_sigint_handler);
     int kbd = aether_tty_open_rw(); /* 回退链：/dev/tty → fd0(tty) → /dev/console → fd1 */
-    if (kbd < 0) { elog_err("editor: 需要 tty"); return 1; }
+    if (kbd < 0) { elog_err("editor: needs a tty"); return 1; }
     if (tty_save(kbd, &tty) != 0 || tty_cbreak(kbd, &tty) != 0) {
-        elog_err("editor: 需要 tty");
+        elog_err("editor: needs a tty");
         return 1;
     }
     int rows = 24, cols = 80;
@@ -296,16 +296,16 @@ static int ed_run(void)
         if (r <= 0 || ed_sigint) break;
 
         if (ed_prompt) {
-            if (ch == 'y' || ch == 'Y') { if (ed_save() == 0) ed_sigint = 1; else ed_status = "保存失败"; ed_prompt = 0; continue; }
+            if (ch == 'y' || ch == 'Y') { if (ed_save() == 0) ed_sigint = 1; else ed_status = "save failed"; ed_prompt = 0; continue; }
             if (ch == 'n' || ch == 'N') { ed_sigint = 1; break; }
             ed_prompt = 0;
-            ed_status = ed_modified ? "未保存（^X 再次退出）" : 0;
+            ed_status = ed_modified ? "not saved (^X again to exit)" : 0;
             continue;
         }
 
         if (ch == 0x13) { /* Ctrl-S */
             int rc = ed_save();
-            ed_status = rc == 0 ? "已保存" : "保存失败";
+            ed_status = rc == 0 ? "saved" : "save failed";
             continue;
         }
         if (ch == 0x18) { /* Ctrl-X */

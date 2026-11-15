@@ -70,10 +70,20 @@ int shell_read_fd0_line(char *buf, size_t cap)
         char ch;
         long r = sys_read(0, &ch, 1);
         if (r <= 0) { if (n == 0) return -1; break; } /* EOF（首尾无内容） */
+        if (aether_telnet_mode && (unsigned char)ch == 0x03) {
+            /* Ctrl-C 从 telnet 客户端过来 → 结束当前救援 shell（等效断开） */
+            sys_write(1, "\r\n", 2);
+            aether_exit(0);
+        }
         if (aether_telnet_mode && (unsigned char)ch == 0xFF) {
             /* IAC：按 telnet 协议跳过（IAC SB … IAC SE 跳过整块；其他跳过一个字节的选项） */
             char opt;
             if (read_byte_or_eof(&opt) != 0) { if (n == 0) return -1; break; }
+            if ((unsigned char)opt == 0xF4 || (unsigned char)opt == 0xF5) {
+                /* IAC IP / AO → 同 Ctrl-C：终止救援 shell */
+                sys_write(1, "\r\n", 2);
+                aether_exit(0);
+            }
             if ((unsigned char)opt == 0xFA) { /* IAC SB … */
                 char prev = 0;
                 for (;;) {

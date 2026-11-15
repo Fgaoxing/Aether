@@ -101,7 +101,7 @@ static int uevent_one(int fd)
         if (sys_mknodat(AT_FDCWD, path, type | 0660, makedev64(maj, min)) == 0)
             elog_info("uevent: + %s (%u:%u)", path, maj, min);
         else
-            elog_err("uevent: mknod %s 失败（%d）", path, AETHER_ERR_CODE(sys_mknodat(AT_FDCWD, path, type | 0660, makedev64(maj, min))));
+            elog_err("uevent: mknod %s failed (%d)", path, AETHER_ERR_CODE(sys_mknodat(AT_FDCWD, path, type | 0660, makedev64(maj, min))));
         return 0;
     }
     if (is_remove) {
@@ -151,12 +151,12 @@ int aether_uevent_monitor(void)
 {
     int fd = uevent_bind();
     if (fd < 0) {
-        elog_err("hotplug: 无法打开 netlink uevent socket（需要 root/CAP_SYS_ADMIN 或内核关闭 uevent）");
+        elog_err("hotplug: cannot open netlink uevent socket (need root/CAP_SYS_ADMIN, or kernel uevent disabled)");
         return 1;
     }
     aether_signal(SIGINT, uevent_monitor_handler);
     aether_signal(SIGTERM, uevent_monitor_handler);
-    elog_info("hotplug: 监听内核 uevent（Ctrl-C 退出）…");
+    elog_info("hotplug: listening for kernel uevents (Ctrl-C to exit)...");
     while (!uevent_monitor_stop) {
         /* SOCK_NONBLOCK：非零时间片内收完所有事件即再次轮询 */
         int rc = uevent_one(fd);
@@ -166,6 +166,6 @@ int aether_uevent_monitor(void)
         }
     }
     sys_close(fd);
-    elog_info("hotplug: 已停止");
+    elog_info("hotplug: stopped");
     return 0;
 }

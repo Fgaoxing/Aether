@@ -1,0 +1,90 @@
+#!/bin/bash
+# SPDX-License-Identifier: GPL-2.0-only
+# aether rescue image — hibernation resume parameter auto-detect hook
+#
+# Detects the swap this machine has (from /etc/fstab) at image build time and bakes
+# the corresponding resume=[resume_offset=...] parameters into the image as
+# /etc/aether/resume. At boot, aether reads /etc/aether/resume when the cmdline
+# does NOT contain resume=/resume_offset=, and writes them to /sys/power/resume —
+# so hibernation resume works WITHOUT passing resume= on the kernel command line.
+#
+# Manual cmdline still wins: `resume=/dev/… resume_offset=…` on the cmdline takes
+# precedence over the baked-in value; `noresume` disables resume entirely.
+#
+# Detection sources (in order):
+#   1. /etc/fstab — swap entries:
+#        - UUID=/LABEL=/dev/* → resume=<spec> (partition swap — works out of the box)
+#        - regular file path  → resume=<dev-of-file> resume_offset=<blocks> only when
+#          page size == filesystem block size (typical x86_64 + ext4); otherwise skipped
+#   2. If /etc/fstab has no usable swap entry, the hook silently does nothing
+#      (hibernation is then not attempted, like other rescue images).
+#
+# This hook NEVER touches /etc/fstab — it is read-only at build time.
+
+build() {
+    local resume_arg=""
+    local line src fstype rest
+
+    if [[ -r /etc/fstab ]]; then
+        while IFS= read -r line; do
+            line="${line%%#*}"
+            line="$(echo "$line" | sed -E 's/[[:space:]]+/ /g; s/^ //; s/ $//')"
+            set -- $line
+            src="$1"; fstype="$3"        # fstab cols: 1=src 2=mountpoint 3=fstype 4=opts...
+            [[ -n "$src" && -n "$fstype" ]] || continue
+            [[ "$fstype" == "swap" || "$fstype" == "swfs" ]] || continue
+            case "$src" in
+                UUID=*|LABEL=*|/dev/*)
+                    resume_arg="resume=$src"
+                    break ;;
+                /*)
+                    # swapfile: needs the block device hosting the file + phys block offset
+                    local dev blkno pagsz bsz
+                    pagsz="$(getconf PAGESIZE 2>/dev/null || echo 4096)"
+                    bsz="$(stat -f -c %S "$src" 2>/dev/null || echo 4096)"
+                    if [[ "$pagsz" == "$bsz" && "$pagsz" == "4096" ]]; then
+                        dev="$(findmnt -n -o SOURCE --target "$src" 2>/dev/null)"
+                        if [[ -n "$dev" ]]; then
+                            blkno="$(filefrag -v "$src" 2>/dev/null | awk '/^ *[0-9]+:/{print $4; exit}' | cut -d. -f1)"
+                            if [[ "$blkno" =~ ^[0-9]+$ ]]; then
+                                resume_arg="resume=$dev resume_offset=$blkno"
+                                break
+                            fi
+                        fi
+                    fi
+                    ;;
+            esac
+        done < /etc/fstab
+    fi
+
+    if [[ -z "$resume_arg" ]]; then
+        warning "aether-resume: no usable swap found in /etc/fstab -- hibernation resume not enabled"
+        return 0
+    fi
+
+    add_dir /etc/aether
+    add_file - /etc/aether/resume 644 <<EOF
+$resume_arg
+EOF
+    quiet "aether-resume: hibernation resume baked into image ($resume_arg)"
+    return 0
+}
+
+help() {
+    cat <<HELPEOF
+aether rescue image — hibernation resume auto-detect hook
+
+Detects the machine's swap partition / swapfile from /etc/fstab at image
+build time and bakes the matching resume=[resume_offset=] parameters into
+the image as /etc/aether/resume. At boot, aether falls back to that file
+when the kernel command line does not contain resume=/resume_offset=.
+
+Feature: no need to manually specify resume= on the cmdline anymore.
+Runtime behaviour:
+  - cmdline has resume=/resume_offset= → those win, the baked file is ignored
+  - noresume on cmdline → resume is skipped entirely
+  - nothing specified anywhere → image tries the baked-in swap (if any), else skips
+HELPEOF
+}
+
+# vim: set ft=sh ts=4 sw=4 et:
