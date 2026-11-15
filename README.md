@@ -151,6 +151,12 @@ at the next checkpoint and drops into rescue.
   (BootCurrent): preview old/new, `y/N` confirm, writes NVRAM (attributes preserved),
   then optionally retry boot immediately
 - `rescue-boot` is the general fix entry point; `efi-cmdline edit` persists it for reboots
+- **`exit` / `rescue-boot` in an init-spawned rescue shell hand off to PID 1** (exit code 42):
+  PID 1 then retries the boot **itself** — `pivot_root`/`execve` replace PID 1, so a successful
+  boot makes the real init PID 1. If the retry fails (bad root, missing device, missing init…),
+  PID 1 kills the remaining rescue children and **re-spawns the rescue environment** — a failed
+  boot always lands you back in the rescue shell (verified on QEMU). Override cmdline:
+  `rescue-boot root=/dev/sdb2 rw` (written to `/etc/.rescue-boot-override`, consumed by PID 1 on retry).
 
 #### Networking in rescue
 
@@ -176,8 +182,13 @@ image as `/etc/aether/resume`. At boot, PID 1 reads it whenever cmdline has no
 
 ```
 resume: using /etc/aether/resume (auto-detected): UUID=fe90b9d4-…
+resume: using /dev/disk/by-uuid/fe90b9d4-… -> /dev/vda
 resume: wrote /sys/power/resume=254:0 (device /dev/vda)
 ```
+
+Right after the uevent pump, PID 1 also populates **`/dev/disk/by-uuid/<uuid> -> ../../<dev>`**
+links for ext4 / vfat / btrfs / swap signatures (initramfs has no udev to do this) — resume
+resolves `UUID=` through this link first and falls back to swap-signature probing if needed.
 
 Verified up to the `/sys/power/resume` write on QEMU (2026-11-15, swap image attached);
 the real hibernate-image restore round-trip is **not** tested.
@@ -220,6 +231,8 @@ What is **verified** (host machine + QEMU, 2026-11-15):
 - ✅ rescue shell → continue boot: `exit` (init-spawned rescue shells) or `rescue-boot` reaches the real root (POWERDOWN on btrfs+virtio good root)
 - ✅ DHCP + telnetd end-to-end (boot & hotplug NIC auto-config, leased 10.0.2.15; inbound shell round-trip; Ctrl-C / IAC IP/AO close the session)
 - ✅ Hibernation resume write-back (`/sys/power/resume=254:0`) with zero cmdline parameters
+- ✅ init-rescue `exit` → PID 1 retries boot itself; failed retry re-spawns rescue shell (verified twice on QEMU)
+- ✅ `/dev/disk/by-uuid` populated at boot (no udev); resume resolves swap `UUID=` via the link on QEMU
 - ✅ `zcat` byte-exact vs official zstd/gzip decompressors
 - ✅ `grep` vs GNU grep on 31 patterns (only `\d` differs, PCRE-like — documented)
 - ✅ English output verified on the wire (`strings` + QEMU console capture)

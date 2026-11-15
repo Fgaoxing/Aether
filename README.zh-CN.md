@@ -149,6 +149,11 @@ PID 1 很早就 fork 一个**后台监视器**，与启动并行监听键盘/控
   （BootCurrent）：预览新旧差异 → `y/N` 确认 → 写入 NVRAM（属性保留）→
   可选地立即用新 cmdline 重试启动
 - `rescue-boot` 是通用修复入口；`efi-cmdline edit` 用于把修复固化到重启之后
+- **init 救援 shell 里的 `exit` / `rescue-boot` 是交给 PID 1 的启动重试请求**（退出码 42）：
+  由 PID 1 本人执行重试——`pivot_root`/`execve` 替换的是 PID 1,成功后真正的 init 成为 PID 1。
+  重试失败（root 错误/设备缺失/init 不存在……）时，PID 1 会先清掉其余 rescue 子进程，
+  **重新拉起整套救援环境**——启动失败永远能回到救援 shell（已在 QEMU 验证）。
+  覆盖 cmdline:`rescue-boot root=/dev/sdb2 rw`（写入 `/etc/.rescue-boot-override`,PID 1 重试时消费）。
 
 #### 救援中的网络
 
@@ -173,8 +178,13 @@ PID 1 很早就 fork 一个**后台监视器**，与启动并行监听键盘/控
 
 ```
 resume: using /etc/aether/resume (auto-detected): UUID=fe90b9d4-…
+resume: using /dev/disk/by-uuid/fe90b9d4-… -> /dev/vda
 resume: wrote /sys/power/resume=254:0 (device /dev/vda)
 ```
+
+PID 1 在 uevent 排空后还会填充 **`/dev/disk/by-uuid/<uuid> -> ../../<dev>`** 软链接
+（ext4 / vfat / btrfs / swap 签名；initramfs 里没有 udev 做这件事）——resume 解析
+`UUID=` 时优先走这条链接，失败再回退到 swap 签名探测。
 
 已在 QEMU 上验证到写入 `/sys/power/resume` 这一步（2026-11-15，挂载了 swap 镜像）；
 真正的休眠镜像恢复往返**尚未实测**。
@@ -217,6 +227,8 @@ sudo ./tools/register-aether-efi.sh --list / --uninstall / --dry-run
 - ✅ rescue shell 中继续启动：`exit`（init 拉起的救援 shell）或 `rescue-boot` 可以到达真正的 root（btrfs+virtio，POWERDOWN）
 - ✅ DHCP + telnetd 端到端（开机 & 热插网卡自动配置，拿到 10.0.2.15；入站 shell 收发正常；Ctrl-C / IAC IP/AO 可断开会话）
 - ✅ 休眠恢复写回（`/sys/power/resume=254:0`),**无 cmdline 参数**
+- ✅ init 救援 shell `exit` → PID 1 本人重试启动；失败重试会重新拉起救援 shell（QEMU 验证两次）
+- ✅ 启动时填充 `/dev/disk/by-uuid`（无 udev);resume 经该链接解析 swap `UUID=`（QEMU)
 - ✅ `zcat` 与官方 zstd/gzip 解压字节级一致
 - ✅ `grep` 与 GNU grep 对比 31 个模式（仅 `\d` 不同，按 PCRE 类处理——已记录）
 - ✅ 英文输出已在链路上验证（`strings` + QEMU 控制台捕获）
