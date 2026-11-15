@@ -1,6 +1,6 @@
 /*
  * sysnum for x86_64 — 启动救援 Shell (aether)
- * 生成自 asm/unistd_64.h（本机 Linux UAPI 头文件，2026-11-14），不自创编号。
+ * 生成自 asm/unistd_64.h（本机 Linux UAPI 头文件，2026-11-16），不自创编号。
  * nolibc 分支专用：本地编译分支（USE_HOST_LIBC=ON）不使用本文件。
  */
 #ifndef AETHER_SYSNUM_X86_64_H
@@ -62,6 +62,8 @@
 #define __NR_fchmodat        268
 #define __NR_fchownat        260
 #define __NR_readlinkat      267
+#define __NR_symlinkat       266
+#define __NR_setsid          112
 #define __NR_utimensat       280
 #define __NR_renameat        264
 #define __NR_ftruncate       77
@@ -78,7 +80,6 @@
 #define __NR_sendto          44
 #define __NR_reboot          169
 #define __NR_finit_module    313
-#define __NR_setsid         112
 #define __NR_init_module     175
 
 #endif /* AETHER_SYSNUM_X86_64_H */

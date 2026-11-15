@@ -282,6 +282,17 @@ long sys_readlink(const char *path, char *buf, size_t bufsiz)
     return syscall_nr(AETHER_NR(readlinkat), AT_FDCWD, (long)path, (long)buf, (long)bufsiz, 0, 0);
 }
 
+long sys_symlinkat(const char *target, int newdirfd, const char *linkpath)
+{
+    /* symlinkat(target, AT_FDCWD, linkpath) */
+    return syscall_nr(AETHER_NR(symlinkat), (long)target, (long)newdirfd, (long)linkpath, 0, 0, 0);
+}
+
+long sys_symlink(const char *target, const char *linkpath)
+{
+    return sys_symlinkat(target, AT_FDCWD, linkpath);
+}
+
 long sys_utimensat(int dirfd, const char *path, const void *times, int flags)
 {
     /* times == NULL → 设为当前时间 */

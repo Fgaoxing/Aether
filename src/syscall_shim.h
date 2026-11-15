@@ -185,6 +185,8 @@ long sys_mknodat(int dirfd, const char *path, unsigned int mode, unsigned long l
 long sys_chmod(const char *path, unsigned int mode);
 long sys_chown(const char *path, unsigned int owner, unsigned int group);
 long sys_readlink(const char *path, char *buf, size_t bufsiz);
+long sys_symlinkat(const char *target, int newdirfd, const char *linkpath);
+long sys_symlink(const char *target, const char *linkpath);
 long sys_utimensat(int dirfd, const char *path, const void *times, int flags);
 long sys_renameat(int olddirfd, const char *old, int newdirfd, const char *new);
 long sys_ftruncate(int fd, long length);

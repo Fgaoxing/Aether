@@ -216,11 +216,20 @@ static int builtin_exit(int argc, char **argv, char **envp)
     unsigned long long code = 0;
     /* init 救援环境（PID 1 启动时 spawn 的 rescue shell）：`exit` 等价 continue boot。
      * 其他 shell（telnetd/普通 spawn）：保持 POSIX exit 语义。 */
-    if (argc == 1) {
+    {
         const char *mode = env_get(envp, "AETHER_INIT");
         if (mode && aether_streq(mode, "rescue")) {
+            /* PID 1 本人（stdio fallback，无控制台时由 PID 1 直接跑 shell）：
+             * 在本进程内直接重试；失败回到本 shell 循环 */
+            if ((long)sys_getpid() == 1) {
+                elog_info("init: exit requested — continuing boot (same as rescue-boot)");
+                return aether_cmd_rescue_boot(1, (char *[]){ (char *)"rescue-boot", 0 }, envp);
+            }
+            /* 普通 init 救援 shell：以 42 退出，由 PID 1 的等待循环接管
+             * （pivot_root/execve 替换 PID 1——成功时 init 成为真正的 PID 1；
+             *  失败时 PID 1 重新拉起救援 shell，启动失败也永远能回到 shell） */
             elog_info("init: exit requested — continuing boot (same as rescue-boot)");
-            return aether_cmd_rescue_boot(1, (char *[]){ (char *)"rescue-boot", 0 }, envp);
+            aether_exit(AETHER_RESCUE_EXIT_BOOT);
         }
     }
     if (argc >= 2) {
@@ -230,6 +239,40 @@ static int builtin_exit(int argc, char **argv, char **envp)
         }
     }
     aether_exit((int)(code & 0xff));
+}
+
+static int builtin_rescue_boot(int argc, char **argv, char **envp)
+{
+    const char *mode = env_get(envp, "AETHER_INIT");
+    if (mode && aether_streq(mode, "rescue") && (long)sys_getpid() != 1) {
+        /* init 救援 shell：覆盖参数写成 /etc/.rescue-boot-override，然后以 42 退出，
+         * 由 PID 1 本人执行启动（pivot_root/execve 才能让 init 成为 PID 1） */
+        if (argc > 1) {
+            char ov[1800];
+            size_t d = 0;
+            for (int i = 1; i < argc; i++) {
+                if (i > 1 && d + 1 < sizeof(ov)) ov[d++] = ' ';
+                const char *a = argv[i];
+                for (size_t j = 0; a[j] && d + 1 < sizeof(ov); j++) ov[d++] = a[j];
+            }
+            ov[d] = '\0';
+            long fd = sys_open("/etc/.rescue-boot-override", O_WRONLY | O_CREAT | O_TRUNC, 0664);
+            if (AETHER_IS_ERR(fd)) {
+                elog_err("rescue-boot: cannot write /etc/.rescue-boot-override (%d)", AETHER_ERR_CODE(fd));
+                return 1;
+            }
+            long n = sys_write((int)fd, ov, d);
+            sys_close((int)fd);
+            if (AETHER_IS_ERR(n) || (size_t)n != d) { elog_err("rescue-boot: write override failed"); return 1; }
+            elog_info("rescue-boot: override cmdline saved: %s", ov);
+        } else {
+            /* 无覆盖参数：清掉旧文件，重试 /proc/cmdline（去掉 aether_rescue） */
+            sys_unlinkat(AT_FDCWD, "/etc/.rescue-boot-override", 0);
+        }
+        elog_info("init: rescue-boot requested — continuing boot (PID 1 takes over)");
+        aether_exit(AETHER_RESCUE_EXIT_BOOT);
+    }
+    return aether_cmd_rescue_boot(argc, argv, envp);
 }
 
 static int builtin_exec(int argc, char **argv, char **envp)
@@ -736,7 +779,7 @@ static const shell_builtin_t builtins[] = {
     { "switch_root", builtin_switch_root, 0, "switch to new root (irreversible, needs YES confirmation)" },
     { "syscall",     builtin_syscall, 0, "debug: syscall <nr> [args...] (numbers differ by arch)" },
     { "cmdline",     aether_cmd_cmdline, 0, "show /proc/cmdline" },
-    { "rescue-boot", aether_cmd_rescue_boot, 0, "retry boot (can override cmdline, e.g. root=/dev/x rw)" },
+    { "rescue-boot", builtin_rescue_boot, 0, "retry boot (can override cmdline, e.g. root=/dev/x rw)" },
     { "efi-cmdline", aether_cmd_efi_cmdline, 0, "view/edit EFI boot entry cmdline (edit needs root)" },
     { "jobs",        builtin_jobs,    1, "list stopped/background jobs" },
     { "fg",          builtin_fg,      1, "bring job to foreground: fg [id]" },

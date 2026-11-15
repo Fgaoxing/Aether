@@ -40,6 +40,10 @@ int aether_uevent_pump(int max_ms);
 /* PID 1 入口：挂载伪文件系统 → uevent 补齐 → cmdline → boot；失败进拯救 shell */
 int aether_init_main(char **envp);
 
+/* init 救援 shell 以该退出码退出 = 请求 PID 1 继续启动（exit / rescue-boot）。
+ * 普通用法退出码永远从 0 开始且不使用 42 */
+#define AETHER_RESCUE_EXIT_BOOT 42
+
 /* 拯救 shell builtins:cmdline / rescue-boot / efi-cmdline */
 int aether_cmd_cmdline(int argc, char **argv, char **envp);
 int aether_cmd_rescue_boot(int argc, char **argv, char **envp);

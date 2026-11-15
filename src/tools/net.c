@@ -664,7 +664,7 @@ have_offer:
         if (AETHER_IS_ERR(r) || r == 0) { if (!quiet) elog_err("udhcpc: no DHCP ACK received"); sys_close(fd); return 1; }
         unsigned char msgtype = 0;
         if (dhcp_parse_reply(pkt, (size_t)r, xid, lease_ip, lease_mask, lease_gw, lease_dns, &dns_n, &msgtype, server_id) != 0 || msgtype != DHCP_ACK) {
-            if (!quiet) elog_err("udhcpc: no DHCP ACK received（type=%d）", msgtype);
+            if (!quiet) elog_err("udhcpc: no DHCP ACK received (type=%d)", msgtype);
             sys_close(fd);
             return 1;
         }

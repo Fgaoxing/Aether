@@ -122,7 +122,6 @@ static int cmd_help(int argc, char **argv, char **envp)
     (void)argc; (void)argv; (void)envp;
     elog_info("aether %s — initramfs rescue shell toolbox (x86_64 / aarch64 / i386 / riscv64)",
               AETHER_VERSION);
-    elog_info("docs: 启动救援Shell-需求文档.md");
     elog_info("usage: aether <applet> [args...]; or hardlink this binary as <applet> and run it directly");
     elog_info("bare `aether` / `sh` enters the rescue shell");
     elog_info("applets:");

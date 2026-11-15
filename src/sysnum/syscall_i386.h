@@ -1,6 +1,6 @@
 /*
  * sysnum for i386 — 启动救援 Shell (aether)
- * 生成自 asm/unistd_32.h（本机 Linux UAPI 头文件，2026-11-14），不自创编号。
+ * 生成自 asm/unistd_32.h（本机 Linux UAPI 头文件，2026-11-16），不自创编号。
  * nolibc 分支专用：本地编译分支（USE_HOST_LIBC=ON）不使用本文件。
  */
 #ifndef AETHER_SYSNUM_I386_H
@@ -61,6 +61,8 @@
 #define __NR_fchmodat        306
 #define __NR_fchownat        298
 #define __NR_readlinkat      305
+#define __NR_symlinkat       304
+#define __NR_setsid          66
 #define __NR_utimensat       320
 #define __NR_renameat        302
 #define __NR_ftruncate       93
@@ -81,7 +83,6 @@
 /* i386 int 0x80 下 __NR_mmap(90) 走内存传参，寄存器传参一律改用 __NR_mmap2(192)：offset 以 4K 页为单位 */
 #define __NR_mmap2           192
 /* i386 无 __NR_newfstatat：32 位内核表位 300 即 fstatat64（unistd_32.h 暴露为 __NR_fstatat64），语义等同 32 位 newfstatat */
-#define __NR_setsid         66
 #define __NR_newfstatat 300
 
 #endif /* AETHER_SYSNUM_I386_H */

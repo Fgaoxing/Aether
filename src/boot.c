@@ -55,10 +55,54 @@ static int try_open_console(const char *path)
 }
 
 /* init 失败回退：在全部可用终端/串口上各起一个救援 shell（PID 1 等所有子进程） */
+/* 收掉 rescue 环境的全部子进程（shell 和后台守护）：SIGTERM 后逐个收割 */
+static void rescue_kill_all(int *pids, int n)
+{
+    for (int i = 0; i < n; i++)
+        if (pids[i] > 0) sys_kill(pids[i], 15 /*SIGTERM*/);
+    for (int i = 0; i < n; i++) {
+        if (pids[i] <= 0) continue;
+        int status = 0;
+        /* ECHILD（已被等待循环回收）直接跳过 */
+        (void)sys_wait4(pids[i], &status, 0, 0);
+    }
+}
+
+/* AETHER_RESCUE_EXIT_BOOT（子进程 exit/rescue-boot 请求）→ PID 1 本人执行启动尝试。
+ * 成功不返回（已 exec 真正的 init，init 成为 PID 1）；失败返回 -1，调用方重新进入救援。 */
+static int rescue_retry_boot(void)
+{
+    aether_cmdline_t opts;
+    char ov[1800];
+    size_t olen = 0;
+    /* 1) rescue-boot 覆盖参数（init 救援 shell 里 rescue-boot args 写入此文件） */
+    if (aether_read_file("/etc/.rescue-boot-override", ov, sizeof(ov) - 1, &olen) == 0 && olen > 0) {
+        ov[olen] = '\0';
+        sys_unlinkat(AT_FDCWD, "/etc/.rescue-boot-override", 0);
+        if (aether_parse_cmdline(ov, &opts) == 0) {
+            elog_info("rescue: retrying boot with override cmdline: %s", ov);
+            return aether_boot_attempt(&opts);
+        }
+        elog_err("rescue: override cmdline parse failed, falling back to /proc/cmdline");
+    }
+    /* 2) /proc/cmdline，剔除 aether_rescue */
+    if (aether_cmdline_file("/proc/cmdline", &opts) != 0) {
+        elog_err("rescue: cannot read /proc/cmdline");
+        return -1;
+    }
+    if (opts.aether_rescue) opts.aether_rescue = 0;
+    elog_info("rescue: retrying boot (root=%s)...", opts.root[0] ? opts.root : "(not set)");
+    return aether_boot_attempt(&opts);
+}
+
 static void rescue_consoles(void)
 {
+    /* 常驻救援：子进程以 42（AETHER_RESCUE_EXIT_BOOT）退出 → 由 PID 1 本人继续启动；
+     * 失败（或其他退出）→ 重新拉起整套救援环境。PID 1 永不退出。 */
+    for (;;) {
     /* 先停掉后台 DELETE 监听并恢复控制台（rescue shell 自带 cbreak/restore） */
     aether_del_watch_stop();
+    int pids[CONSOLE_CANDIDATES_MAX * 3 + 8];
     /* 去重：/dev/console 是内核 console= 列表的别名，
      * console=ttyS0 时 /dev/console 与 /dev/ttyS0 是同一设备，
      * 都打开会导致两个 shell 抢同一输入。读内核 console 列表，只为真实控制台起 shell。 */
@@ -121,7 +165,7 @@ static void rescue_consoles(void)
             }
             if (pid > 0) {
                 elog_info("rescue: rescue shell started on %s (pid=%d)", pl[i], pid);
-                nch++;
+                pids[nch++] = pid;
                 opened++;
             } else {
                 elog_err("rescue: fork rescue shell failed (%d), skip %s", AETHER_IS_ERR(pid) ? AETHER_ERR_CODE(pid) : 0, pl[i]);
@@ -139,7 +183,7 @@ static void rescue_consoles(void)
         }
         if (hfd > 0) {
             elog_info("rescue: uevent hotplug daemon started (hotplug)");
-            nch++; /* 计入 PID 1 等待集合 */
+            pids[nch++] = hfd;
         }
     }
 
@@ -152,7 +196,7 @@ static void rescue_consoles(void)
         }
         if (nfd > 0) {
             elog_info("rescue: network auto-config started (background retry until success; 'nonet' to skip)");
-            nch++; /* 计入 PID 1 等待集合 */
+            pids[nch++] = nfd;
         }
     }
 
@@ -162,16 +206,30 @@ static void rescue_consoles(void)
             static char *const rescue_env[] = { (char *)"AETHER_INIT=rescue", 0 };
             shell_main(1, (char *[]){ (char *)"aether", 0 }, rescue_env);
         }
-        aether_exit(0);
+        elog_info("init: stdio rescue shell exited -- continuing boot");
+        if (rescue_retry_boot() == 0) return; /* 不可达（已 exec） */
+        elog_err("rescue: retry boot failed -- restarting rescue shell");
+        continue;
     }
-    /* PID 1：等所有 rescue shell 结束；全部结束也绝不退出（否则 panic） */
-    for (;;) {
+    /* PID 1：等子进程；任一以 42 退出 → 立即停掉其余子进程，PID 1 本人继续启动 */
+    int retry = 0;
+    int live = nch;
+    while (live > 0 && !retry) {
         int status = 0;
         long r = sys_wait4(-1, &status, 0, 0);
         if (AETHER_IS_ERR(r)) {
             if (AETHER_ERR_CODE(r) == 4) continue; /* EINTR */
             break; /* ECHILD：没有子进程了 */
         }
+        live--;
+        if (((status >> 8) & 0xff) == AETHER_RESCUE_EXIT_BOOT) retry = 1;
+    }
+    rescue_kill_all(pids, nch);
+    if (retry) {
+        if (rescue_retry_boot() == 0) return; /* 不可达（已 exec） */
+        elog_err("rescue: retry boot failed -- back to rescue shell");
+    }
+    /* 全部子进程退出（或 retry 失败）→ 重新进入救援（PID 1 常驻，绝不退出/panic） */
     }
 }
 
@@ -550,6 +608,111 @@ static int foreach_partition(int (*cb)(const char *, const char *, void *), void
     return 0;
 }
 
+/* swap_probe 定义在后面（resume 段），此处前置声明 */
+static int swap_probe(const char *devpath, unsigned char uuid_out[16]);
+
+/* =============== /dev/disk/by-uuid 映射 ===============
+ * initramfs 里没有 udev：不建 by-uuid 链接的话，UUID= 找swap/root 只能靠 aether 自己扫签名；
+ * 用户/脚本按常规路径（/dev/disk/by-uuid/<uuid>）引用设备的地方一样用不了。
+ * 在 uevent 排空之后、解析 root 之前，扫描全部块设备签名并创建链接。
+ * 需要 root（init 阶段天然 root）；失败仅警告。 */
+
+static void uuid_bytes_to_str(const unsigned char b[16], char out[37])
+{
+    static const char hex[] = "0123456789abcdef";
+    int n = 0;
+    for (int i = 0; i < 16; i++) {
+        if (i == 4 || i == 6 || i == 8 || i == 10) out[n++] = '-';
+        out[n++] = hex[(b[i] >> 4) & 0xf];
+        out[n++] = hex[b[i] & 0xf];
+    }
+    out[n] = '\0';
+}
+
+static void vfat_uuid_to_str(const unsigned char v[4], char out[10])
+{
+    static const char hex[] = "0123456789ABCDEF";
+    int n = 0;
+    for (int i = 0; i < 4; i++) {
+        if (i == 2) out[n++] = '-';
+        out[n++] = hex[(v[i] >> 4) & 0xf];
+        out[n++] = hex[v[i] & 0xf];
+    }
+    out[n] = '\0';
+}
+
+/* 创建 /dev/disk/by-uuid/<uuid> -> ../../<name> */
+static int byuuid_link(const char *name, const char *uuidstr, int *created)
+{
+    char linkpath[128];
+    size_t d = 0;
+    const char *pre = "/dev/disk/by-uuid/";
+    for (size_t i = 0; pre[i] && d + 1 < sizeof(linkpath); i++) linkpath[d++] = pre[i];
+    for (size_t i = 0; uuidstr[i] && d + 1 < sizeof(linkpath); i++) linkpath[d++] = uuidstr[i];
+    linkpath[d] = '\0';
+
+    char target[64];
+    size_t t = 0;
+    const char *tp = "../../";
+    for (size_t i = 0; tp[i] && t + 1 < sizeof(target); i++) target[t++] = tp[i];
+    for (size_t i = 0; name[i] && t + 1 < sizeof(target); i++) target[t++] = name[i];
+    target[t] = '\0';
+
+    sys_unlinkat(AT_FDCWD, linkpath, 0); /* 已存在则覆盖 */
+    long r = sys_symlink(target, linkpath);
+    if (AETHER_IS_ERR(r)) return -1;
+    (*created)++;
+    return 0;
+}
+
+typedef struct { int created; } byuuid_ctx_t;
+
+static int byuuid_ext4_cb(const char *devpath, const char *name, void *vctx)
+{
+    unsigned char uuid[16]; char label[17];
+    if (ext4_probe(devpath, uuid, label) != 0) return 0;
+    char s[37]; uuid_bytes_to_str(uuid, s);
+    byuuid_link(name, s, &((byuuid_ctx_t *)vctx)->created);
+    return 0;
+}
+static int byuuid_vfat_cb(const char *devpath, const char *name, void *vctx)
+{
+    unsigned char vol[4]; char vlabel[12];
+    if (vfat_probe(devpath, vol, vlabel) != 0) return 0;
+    char s[10]; vfat_uuid_to_str(vol, s);
+    byuuid_link(name, s, &((byuuid_ctx_t *)vctx)->created);
+    return 0;
+}
+static int byuuid_btrfs_cb(const char *devpath, const char *name, void *vctx)
+{
+    unsigned char uuid[16];
+    if (btrfs_probe(devpath, uuid) != 0) return 0;
+    char s[37]; uuid_bytes_to_str(uuid, s);
+    byuuid_link(name, s, &((byuuid_ctx_t *)vctx)->created);
+    return 0;
+}
+static int byuuid_swap_cb(const char *devpath, const char *name, void *vctx)
+{
+    unsigned char uuid[16];
+    if (swap_probe(devpath, uuid) != 0) return 0;
+    char s[37]; uuid_bytes_to_str(uuid, s);
+    byuuid_link(name, s, &((byuuid_ctx_t *)vctx)->created);
+    return 0;
+}
+
+static void aether_populate_by_uuid(void)
+{
+    /* 目录结构 /dev/disk/by-uuid */
+    sys_mkdirat(AT_FDCWD, "/dev/disk", 0755);
+    sys_mkdirat(AT_FDCWD, "/dev/disk/by-uuid", 0755);
+    byuuid_ctx_t ctx = { 0 };
+    foreach_partition(byuuid_ext4_cb, &ctx);
+    foreach_partition(byuuid_vfat_cb, &ctx);
+    foreach_partition(byuuid_btrfs_cb, &ctx);
+    foreach_partition(byuuid_swap_cb, &ctx);
+    elog_info("aether: /dev/disk/by-uuid populated (%d link%s)", ctx.created, ctx.created == 1 ? "" : "s");
+}
+
 int aether_resolve_root(const char *spec, char *out, size_t cap)
 {
     if (!spec || !*spec) { elog_err("root= is empty"); return -1; }
@@ -744,13 +907,45 @@ static int aether_resolve_resume(const char *spec, char *majmin, size_t majmin_c
     } else if (has_prefix(spec, "UUID=") || has_prefix(spec, "uuid=")) {
         unsigned char want[16];
         if (uuid_parse(spec + 5, want) != 0) { elog_err("resume: invalid UUID '%s'", spec + 5); return -1; }
-        resume_ctx_t ctx;
-        ctx.want = spec + 5;
-        for (int i = 0; i < 16; i++) ctx.want_uuid[i] = want[i];
-        ctx.found = 0; ctx.ioerr = 0;
-        if (foreach_partition(resume_probe_cb, &ctx) > 0 && ctx.found)
-            copy_str(dev, sizeof(dev), ctx.out);
-        else { elog_err("resume: no swap device with that UUID"); return -1; }
+        /* 优先 /dev/disk/by-uuid/<uuid>(由 aether_populate_by_uuid 创建)——
+         * 最可靠：不依赖本函数的签名探测（v1 swap 可识别；mkswap --swap-uuid 变体等边角情况也兜得住） */
+        char linkpath[160];
+        size_t d = 0;
+        const char *pre = "/dev/disk/by-uuid/";
+        const char *u = spec + 5;
+        for (size_t i = 0; pre[i] && d + 1 < sizeof(linkpath); i++) linkpath[d++] = pre[i];
+        for (size_t i = 0; u[i] && d + 1 < sizeof(linkpath); i++) linkpath[d++] = (u[i] >= 'A' && u[i] <= 'Z') ? (char)(u[i] + 32) : u[i];
+        linkpath[d] = '\0';
+        long lfd = sys_open(linkpath, O_RDONLY, 0);
+        if (!AETHER_IS_ERR(lfd)) {
+            sys_close((int)lfd);
+            /* readlink 出目标（"../../nvme0n1p5"）→ /dev/<basename> */
+            char target[64];
+            long tl = sys_readlink(linkpath, target, sizeof(target) - 1);
+            if (!AETHER_IS_ERR(tl) && tl > 0) {
+                target[tl] = '\0';
+                const char *name = target;
+                for (const char *p = target; *p; p++) if (*p == '/') name = p + 1;
+                char full[64];
+                size_t fd_ = 0;
+                const char *pre2 = "/dev/";
+                for (size_t i = 0; pre2[i] && fd_ + 1 < sizeof(full); i++) full[fd_++] = pre2[i];
+                for (size_t i = 0; name[i] && fd_ + 1 < sizeof(full); i++) full[fd_++] = name[i];
+                full[fd_] = '\0';
+                copy_str(dev, sizeof(dev), full);
+            } else {
+                copy_str(dev, sizeof(dev), linkpath); /* 走不通也递给 majmin 尝试 */
+            }
+            elog_info("resume: using %s -> %s", linkpath, dev);
+        } else {
+            resume_ctx_t ctx;
+            ctx.want = spec + 5;
+            for (int i = 0; i < 16; i++) ctx.want_uuid[i] = want[i];
+            ctx.found = 0; ctx.ioerr = 0;
+            if (foreach_partition(resume_probe_cb, &ctx) > 0 && ctx.found)
+                copy_str(dev, sizeof(dev), ctx.out);
+            else { elog_err("resume: no swap device with that UUID"); return -1; }
+        }
     } else if (spec[0] == '/') {
         long fd = sys_open(spec, O_RDONLY, 0);
         if (AETHER_IS_ERR(fd)) { elog_err("resume: device %s missing or not accessible (%d)", spec, AETHER_ERR_CODE(fd)); return -1; }
@@ -865,8 +1060,10 @@ static void try_hibernate_resume(const aether_cmdline_t *opts_orig)
         elog_err("resume: write to /sys/power/resume failed (permission? kernel disabled?)");
         return;
     }
-    elog_info("resume: wrote /sys/power/resume=%s%s%s%s", majmin,
-              devpath[0] ? "(device " : "", devpath[0] ? devpath : "", devpath[0] ? "）" : "");
+    if (devpath[0])
+        elog_info("resume: wrote /sys/power/resume=%s (device %s)", majmin, devpath);
+    else
+        elog_info("resume: wrote /sys/power/resume=%s", majmin);
     if (opts->resume_offset != 0) {
         char obuf[24];
         size_t n = aether_u64toa(obuf, sizeof(obuf), opts->resume_offset);
@@ -1261,6 +1458,9 @@ int aether_init_main(char **envp)
 
     /* 2. uevent 顶上 devtmpfs 缺口 */
     aether_uevent_pump(1500);
+
+    /* 2.5 填充 /dev/disk/by-uuid（initramfs 无 udev；resume/root=UUID= 与用户脚本都靠它） */
+    aether_populate_by_uuid();
 
     /* 1.9 DELETE 检查点 3：uevent 期间按键即进 rescue */
     if (aether_del_rescue_hit()) return 0; /* 不可达 */
