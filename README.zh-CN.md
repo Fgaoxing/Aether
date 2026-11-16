@@ -40,7 +40,7 @@
 | 锁/同步 | `flock fsync sync` |
 | 压缩 | `zcat`（zstd + gzip，与官方工具字节级一致） |
 | 网络 | `ifconfig udhcpc telnetd netup` |
-| 系统 | `lspci lsusb scsi serial raidautorun kbd_mode hotplug` |
+| 系统 | `lspci lsusb scsi serial raidautorun kbd_mode hotplug swapon swapoff` |
 | 电源 | `reboot halt` |
 | builtin | `cd exit exec pwd echo [ test mount umount chroot switch_root syscall true false : cmdline rescue-boot efi-cmdline` |
 
@@ -186,8 +186,20 @@ PID 1 在 uevent 排空后还会填充 **`/dev/disk/by-uuid/<uuid> -> ../../<dev
 （ext4 / vfat / btrfs / swap 签名；initramfs 里没有 udev 做这件事）——resume 解析
 `UUID=` 时优先走这条链接，失败再回退到 swap 签名探测。
 
-已在 QEMU 上验证到写入 `/sys/power/resume` 这一步（2026-11-15，挂载了 swap 镜像）；
-真正的休眠镜像恢复往返**尚未实测**。
+已在 QEMU 上验证到写入 `/sys/power/resume` 这一步（2026-11-15)；**完整往返
+（休眠 → 掉电 → 启动 → 会话恢复）已在 QEMU 验证（2026-11-17)**（见验证状态）。
+
+**验证笔记（2026-11-17，QEMU)：**
+
+- QEMU 不实现 ACPI S4，默认 `platform` 休眠模式会一直挂住。虚拟机里测休眠用
+  `echo shutdown > /sys/power/disk` 再 `echo disk > /sys/power/state`。
+- 休眠后 swap offset 4086 的签名变成 `S1SUSPEND`（不是 `SWAPSPACE2`)——内核会用休眠镜像头覆盖
+  swap 头。aether 的 `swap_probe` 两种都识别，所以休眠前后都能定位设备。
+- 真实机器上，**普通** Arch 启动项不会自动恢复：除非 cmdline 带 `resume=UUID=…` 或者普通镜像
+  里也包含 `aether-resume` hook（两者都没有时，正常启动会被 `systemd-hibernate-clear.service`
+  悄悄清掉残余镜像——这正是"和没有一样"的表象）。推荐在 aether 救援入口的用法：休眠 → 从 aether
+  救援入口启动 → 在救援提示符下按 `exit`(PID 1 在重试前完成 resume 写入，早于启动流程）→
+  内核在恢复点直接切回之前的会话。这就是上面 QEMU 端到端验证的路径。
 
 #### EFI 启动项集成
 
@@ -208,8 +220,8 @@ sudo ./tools/register-aether-efi.sh --list / --uninstall / --dry-run
 - `chattr` 写入需要 CAP_LINUX_IMMUTABLE（否则 EPERM——救援中挂载后以 root 操作即可）
 - `kbd_mode` 仅 VT 控制台可用（pty/serial 正确返回 `ENOTTY`）
 - `raidautorun` 需要 mdadm（内核 RAID_AUTORUN ioctl 自 ≥ 4.x 起已移除）
-- resume 支持 `resume=/dev`、`PARTUUID=`、`PARTLABEL=`、`UUID=`（swap 签名探测）及 major:minor 直通——
-  不支持 `LABEL=`，不自动激活 dm-crypt/LVM
+- resume 支持 `resume=/dev`、`PARTUUID=`、`PARTLABEL=`、`UUID=`（swap 签名探测，含休眠态 `S1SUSPEND`)
+  及 major:minor 直通——不支持 `LABEL=`，不自动激活 dm-crypt/LVM
 - EFI/NVRAM 写入（`efibootmgr -B/-o`、`efi-cmdline edit`）务必先在**牺牲用的虚拟机**上验证
 - `lsblk` 不展开 btrfs 子卷
 - aarch64 / riscv64 仅构建可用，运行时未测试
@@ -227,6 +239,9 @@ sudo ./tools/register-aether-efi.sh --list / --uninstall / --dry-run
 - ✅ rescue shell 中继续启动：`exit`（init 拉起的救援 shell）或 `rescue-boot` 可以到达真正的 root（btrfs+virtio，POWERDOWN）
 - ✅ DHCP + telnetd 端到端（开机 & 热插网卡自动配置，拿到 10.0.2.15；入站 shell 收发正常；Ctrl-C / IAC IP/AO 可断开会话）
 - ✅ 休眠恢复写回（`/sys/power/resume=254:0`),**无 cmdline 参数**
+- ✅ **QEMU 完整休眠往返**:`echo disk > /sys/power/state` → 掉电 → 再次启动自动检测休眠中的
+  swap(S1SUSPEND 签名）→ 写入 `/sys/power/resume=254:0` → 内核恢复之前的会话
+  （端到端验证；恢复后会话中 marker 文件仍在）
 - ✅ init 救援 shell `exit` → PID 1 本人重试启动；失败重试会重新拉起救援 shell（QEMU 验证两次）
 - ✅ 启动时填充 `/dev/disk/by-uuid`（无 udev);resume 经该链接解析 swap `UUID=`（QEMU)
 - ✅ `zcat` 与官方 zstd/gzip 解压字节级一致
@@ -287,6 +302,11 @@ python3 tools/pty_test.py ./build-nolibc/aether                           # 交�
 
 - v0.1 —— 核心 shell + init 流程
 - v0.2 —— 完整救援工具链 + PID 1 + EFI cmdline 编辑
+- v0.2.2 (2026-11-17) ——
+  - `swapon` / `swapoff` applet
+  - `swap_probe` 识别休眠态 swap(`S1SUSPEND`，与 `SWAPSPACE2`/`SWAP-SPACE` 并列）
+  - `aether-resume` hook:`AETHER_RESUME` 环境变量构建期显式指定 resume spec
+  - 休眠恢复端到端验证通过（QEMU：掉电→再启动→内核恢复会话）
 - v0.2.1 (2026-11-15) ——
   - zstd + gzip 压缩/解压；`zcat`；与官方工具字节级一致
   - `resume=` 休眠支持 + **无 cmdline 休眠恢复**（`aether-resume` hook)

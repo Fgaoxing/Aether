@@ -41,7 +41,7 @@ Every step that can fail drops into an interactive **rescue shell** — never a 
 | lock / sync | `flock fsync sync` |
 | compress | `zcat` (zstd + gzip, byte-exact vs official tools) |
 | network | `ifconfig udhcpc telnetd netup` |
-| system | `lspci lsusb scsi serial raidautorun kbd_mode hotplug` |
+| system | `lspci lsusb scsi serial raidautorun kbd_mode hotplug swapon swapoff` |
 | power | `reboot halt` |
 | builtins | `cd exit exec pwd echo [ test mount umount chroot switch_root syscall true false : cmdline rescue-boot efi-cmdline` |
 
@@ -190,8 +190,23 @@ Right after the uevent pump, PID 1 also populates **`/dev/disk/by-uuid/<uuid> ->
 links for ext4 / vfat / btrfs / swap signatures (initramfs has no udev to do this) — resume
 resolves `UUID=` through this link first and falls back to swap-signature probing if needed.
 
-Verified up to the `/sys/power/resume` write on QEMU (2026-11-15, swap image attached);
-the real hibernate-image restore round-trip is **not** tested.
+Verified up to the `/sys/power/resume` write on QEMU (2026-11-15); **full round-trip
+(hibernate → poweroff → boot → session restored) verified on QEMU 2026-11-17** (see Verification status).
+
+**Notes from verification (2026-11-17, QEMU):**
+
+- QEMU does not implement ACPI S4, so the default `platform` hibernation mode just hangs.
+  For hibernation testing in a VM, use `echo shutdown > /sys/power/disk` before `echo disk > /sys/power/state`.
+- A hibernated swap's signature at offset 4086 becomes `S1SUSPEND` (not `SWAPSPACE2`) — the kernel
+  overwrites the swap header with the hibernation image header. aether's `swap_probe` detects both,
+  so devices resolve correctly pre- and post-hibernate.
+- On a real machine, the **normal** Arch entry will not resume by itself unless it carries
+  `resume=UUID=…` on its cmdline **or** the normal image includes the `aether-resume` hook
+  (a normal boot with neither will silently wipe the stale image via `systemd-hibernate-clear.service`,
+  which is exactly what "no effect" looked like). The recommended flow for an aether rescue entry:
+  hibernate → boot the aether rescue entry → at the rescue prompt press `exit` (PID 1 performs
+  the resume write at retry, before falling through to the boot path) → the kernel restores
+  the previous session mid-restore. This is the path verified end-to-end above on QEMU.
 
 #### EFI boot-entry integration
 
@@ -212,8 +227,8 @@ sudo ./tools/register-aether-efi.sh --list / --uninstall / --dry-run
 - `chattr` write path needs CAP_LINUX_IMMUTABLE (EPERM otherwise — root after mounting in rescue is fine)
 - `kbd_mode` is VT-only (pty/serial correctly return `ENOTTY`)
 - `raidautorun` needs mdadm (the kernel RAID_AUTORUN ioctl was removed in ≥ 4.x)
-- Resume supports `resume=/dev`, `PARTUUID=`, `PARTLABEL=`, `UUID=` (swap-signature probe), major:minor pass-through —
-  no `LABEL=`, no automatic dm-crypt/LVM activation
+- Resume supports `resume=/dev`, `PARTUUID=`, `PARTLABEL=`, `UUID=` (swap-signature probe, incl. hibernated `S1SUSPEND`),
+  major:minor pass-through — no `LABEL=`, no automatic dm-crypt/LVM activation
 - EFI/NVRAM writes (`efibootmgr -B/-o`, `efi-cmdline edit`) must be tried in a **sacrificial VM** first
 - `lsblk` does not expand btrfs subvolumes
 - aarch64 / riscv64 builds only; runtime untested
@@ -231,6 +246,9 @@ What is **verified** (host machine + QEMU, 2026-11-15):
 - ✅ rescue shell → continue boot: `exit` (init-spawned rescue shells) or `rescue-boot` reaches the real root (POWERDOWN on btrfs+virtio good root)
 - ✅ DHCP + telnetd end-to-end (boot & hotplug NIC auto-config, leased 10.0.2.15; inbound shell round-trip; Ctrl-C / IAC IP/AO close the session)
 - ✅ Hibernation resume write-back (`/sys/power/resume=254:0`) with zero cmdline parameters
+- ✅ **Hibernation round-trip on QEMU**: `echo disk > /sys/power/state` → poweroff → next boot auto-detects
+  the hibernated swap (S1SUSPEND signature) → `/sys/power/resume=254:0` → kernel restores the previous session
+  (verified end-to-end; marker file in the restored session confirms state)
 - ✅ init-rescue `exit` → PID 1 retries boot itself; failed retry re-spawns rescue shell (verified twice on QEMU)
 - ✅ `/dev/disk/by-uuid` populated at boot (no udev); resume resolves swap `UUID=` via the link on QEMU
 - ✅ `zcat` byte-exact vs official zstd/gzip decompressors
@@ -292,6 +310,11 @@ Design principles:
 
 - v0.1 — core shell + init flow
 - v0.2 — full rescue toolchain + PID 1 + EFI cmdline editing
+- v0.2.2 (2026-11-17) —
+  - `swapon` / `swapoff` applets
+  - `swap_probe` recognizes hibernated swap (`S1SUSPEND`) alongside `SWAPSPACE2`/`SWAP-SPACE`
+  - `aether-resume` hook: `AETHER_RESUME` env override for explicit resume spec at build time
+  - hibernation restore end-to-end verified on QEMU (session restored after poweroff→boot)
 - v0.2.1 (2026-11-15) —
   - zstd + gzip (de)compression; `zcat`; byte-exact vs official tools
   - `resume=` hibernation support + **no-cmdline resume** via the `aether-resume` hook
