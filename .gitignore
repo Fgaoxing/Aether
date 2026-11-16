@@ -7,3 +7,19 @@ initramfs/*.cpio
 initramfs/*.img
 .vscode/
 .idea/
+
+# safety net: accidentally extracted test initramfs content at repo root
+/etc/
+/usr/
+/kernel/
+/init
+/VERSION
+/early_cpio
+/bin
+/sbin
+/lib
+/lib64
+/buildconfig
+/config
+/new_root
+/var/run
