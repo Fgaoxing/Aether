@@ -82,6 +82,8 @@ static const aether_applet_t applet_table[] = {
     { "fsync",      tool_fsync,    "sync caches to disk" },
     { "sync",       tool_sync,     "sync caches to disk" },
     { "reboot",     tool_reboot,   "sync and reboot (needs root)" },
+    { "swapon",     tool_swapon,   "enable swap (needs root)" },
+    { "swapoff",     tool_swapoff,  "disable swap (needs root)" },
     { "halt",       tool_halt,     "sync and halt/poweroff (needs root)" },
     { "grep",       tool_grep,     "extended regex search (-i -v -n -c -l -q -e)" },
     { "lspci",      tool_lspci,    "PCI device list" },

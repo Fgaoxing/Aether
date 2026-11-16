@@ -1,6 +1,6 @@
 /*
  * sysnum for aarch64 — 启动救援 Shell (aether)
- * 生成自 asm-generic/unistd.h（本机 Linux UAPI 头文件，2026-11-16），不自创编号。
+ * 生成自 asm-generic/unistd.h（本机 Linux UAPI 头文件，2026-11-17），不自创编号。
  * nolibc 分支专用：本地编译分支（USE_HOST_LIBC=ON）不使用本文件。
  * aarch64/riscv64 沿用 asm-generic 编号表，不存在 open/fork/vfork/pipe/dup2（见需求文档 5.1）
  * fork/vfork 用 clone(SIGCHLD, ...) 模拟；pipe 用 pipe2(fds, 0) 模拟；dup2 用 dup3(fd, fd2, 0) 模拟。
@@ -61,6 +61,8 @@
 #define __NR_readlinkat      78
 #define __NR_symlinkat       36
 #define __NR_setsid          157
+#define __NR_swapon          224
+#define __NR_swapoff         225
 #define __NR_utimensat       88
 #define __NR_renameat        38
 #define __NR_ftruncate       46

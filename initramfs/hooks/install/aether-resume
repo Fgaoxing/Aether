@@ -12,6 +12,8 @@
 # precedence over the baked-in value; `noresume` disables resume entirely.
 #
 # Detection sources (in order):
+#   0. AETHER_RESUME environment variable at build time (verbatim, highest priority), e.g.:
+#        AETHER_RESUME=resume=UUID=… mkinitcpio -c … -g …
 #   1. /etc/fstab — swap entries:
 #        - UUID=/LABEL=/dev/* → resume=<spec> (partition swap — works out of the box)
 #        - regular file path  → resume=<dev-of-file> resume_offset=<blocks> only when
@@ -25,7 +27,13 @@ build() {
     local resume_arg=""
     local line src fstype rest
 
-    if [[ -r /etc/fstab ]]; then
+    # AETHER_RESUME 覆盖：构建时直接指定（例如给别的机器做镜像），格式同 fstab 检测结果：
+    #   AETHER_RESUME=resume=UUID=c0ffee00-…  或  AETHER_RESUME="resume=/dev/sda2 resume_offset=12345"
+    if [[ -n "${AETHER_RESUME:-}" ]]; then
+        resume_arg="$AETHER_RESUME"
+    fi
+
+    if [[ -z "$resume_arg" && -r /etc/fstab ]]; then
         while IFS= read -r line; do
             line="${line%%#*}"
             line="$(echo "$line" | sed -E 's/[[:space:]]+/ /g; s/^ //; s/ $//')"

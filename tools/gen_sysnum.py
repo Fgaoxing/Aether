@@ -13,7 +13,7 @@ SYMBOLS = ["read","write","open","openat","close","lseek","mmap","mprotect","mun
            "mount","umount2","faccessat","faccessat2","newfstatat","statx",
            "unlinkat","syslog","rt_sigaction","rt_sigreturn","getdents64","mkdirat",
            "nanosleep","socket","bind","recvfrom","mknodat","getpid",
-           "fchmodat","fchownat","readlinkat","symlinkat","setsid","utimensat","renameat",
+           "fchmodat","fchownat","readlinkat","symlinkat","setsid","swapon","swapoff","utimensat","renameat",
            "ftruncate","truncate","fsync","sync","flock",
            "setpgid","getpgid","kill","listen","accept4","setsockopt","sendto","reboot","finit_module","init_module"]
 

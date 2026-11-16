@@ -293,6 +293,17 @@ long sys_symlink(const char *target, const char *linkpath)
     return sys_symlinkat(target, AT_FDCWD, linkpath);
 }
 
+long sys_swapon(const char *path, int swap_flags)
+{
+    /* swapon(path, swap_flags) */
+    return syscall_nr(AETHER_NR(swapon), (long)path, (long)swap_flags, 0, 0, 0, 0);
+}
+
+long sys_swapoff(const char *path)
+{
+    return syscall_nr(AETHER_NR(swapoff), (long)path, 0, 0, 0, 0, 0);
+}
+
 long sys_utimensat(int dirfd, const char *path, const void *times, int flags)
 {
     /* times == NULL → 设为当前时间 */

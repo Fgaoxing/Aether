@@ -110,6 +110,7 @@ add_library(aether_core STATIC
     src/tools/hex.c
     src/tools/find.c
     src/tools/syslock.c
+    src/tools/swap.c
     src/tools/decompress.c
     src/tools/compress.c
     src/tools/regex.c

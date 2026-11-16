@@ -1,6 +1,6 @@
 /*
  * sysnum for i386 — 启动救援 Shell (aether)
- * 生成自 asm/unistd_32.h（本机 Linux UAPI 头文件，2026-11-16），不自创编号。
+ * 生成自 asm/unistd_32.h（本机 Linux UAPI 头文件，2026-11-17），不自创编号。
  * nolibc 分支专用：本地编译分支（USE_HOST_LIBC=ON）不使用本文件。
  */
 #ifndef AETHER_SYSNUM_I386_H
@@ -63,6 +63,8 @@
 #define __NR_readlinkat      305
 #define __NR_symlinkat       304
 #define __NR_setsid          66
+#define __NR_swapon          87
+#define __NR_swapoff         115
 #define __NR_utimensat       320
 #define __NR_renameat        302
 #define __NR_ftruncate       93

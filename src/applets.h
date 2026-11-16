@@ -75,6 +75,8 @@ int tool_flock(int argc, char **argv, char **envp);
 int tool_fsync(int argc, char **argv, char **envp);
 int tool_sync(int argc, char **argv, char **envp);
 int tool_reboot(int argc, char **argv, char **envp);
+int tool_swapon(int argc, char **argv, char **envp);
+int tool_swapoff(int argc, char **argv, char **envp);
 int tool_halt(int argc, char **argv, char **envp);
 int tool_grep(int argc, char **argv, char **envp);
 int tool_lspci(int argc, char **argv, char **envp);

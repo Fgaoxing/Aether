@@ -817,8 +817,12 @@ static int swap_probe(const char *devpath, unsigned char uuid_out[16])
     sys_close((int)fd);
     if (AETHER_IS_ERR(r) || (size_t)r < sizeof(buf)) return -1;
     const char *magic = (const char *)buf + 4086;
+    /* 识别三种签名：未休眠 swap（SWAPSPACE2 / SWAP-SPACE）以及休眠中 swap（S1SUSPEND——
+     * 内核休眠时会覆盖掉 swap 签名写入休眠镜像头，见 kernel/power/swap.c）。
+     * 休眠中的 swap 必须能被识别，否则 resume 目标设备定位失败、by-uuid 链接也建不出来。 */
     if (aether_strncmp(magic, "SWAPSPACE2", 10) != 0 &&
-        aether_strncmp(magic, "SWAP-SPACE", 10) != 0)
+        aether_strncmp(magic, "SWAP-SPACE", 10) != 0 &&
+        aether_strncmp(magic, "S1SUSPEND", 9) != 0)
         return -1;
     for (int i = 0; i < 16; i++) uuid_out[i] = buf[1036 + i];
     return 0;
