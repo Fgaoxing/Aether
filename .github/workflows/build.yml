@@ -1,0 +1,109 @@
+# CI: build x86_64 (libc + nolibc + tests), cross-build i386 / aarch64 / riscv64 (nolibc static).
+# Pushing a tag v* additionally creates a GitHub Release with the static binaries + SHA256SUMS.
+name: build
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  x86_64:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install deps
+        run: sudo apt-get update && sudo apt-get install -y cmake clang gcc binutils
+      - name: libc build + ctest
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+          cmake --build build -j"$(nproc)"
+          ctest --test-dir build --output-on-failure
+      - name: nolibc static build
+        run: |
+          cmake -S . -B build-nolibc -DUSE_HOST_LIBC=OFF -DCMAKE_BUILD_TYPE=Release
+          cmake --build build-nolibc -j"$(nproc)"
+          file build-nolibc/aether
+      - uses: actions/upload-artifact@v4
+        with:
+          name: aether-x86_64-nolibc
+          path: build-nolibc/aether
+
+  i386:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install deps
+        run: sudo apt-get update && sudo apt-get install -y cmake clang binutils
+      - name: nolibc i386 cross build (clang --target=i386-unknown-linux-gnu)
+        run: |
+          CC=clang cmake -S . -B build-i386 -DUSE_HOST_LIBC=OFF -DAETHER_ARCH=i386 \
+            -DCMAKE_C_FLAGS="--target=i386-unknown-linux-gnu" -DCMAKE_BUILD_TYPE=Release
+          cmake --build build-i386 -j"$(nproc)"
+          file build-i386/aether
+      - uses: actions/upload-artifact@v4
+        with:
+          name: aether-i386-nolibc
+          path: build-i386/aether
+
+  aarch64:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install deps
+        run: sudo apt-get update && sudo apt-get install -y cmake gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu
+      - name: nolibc aarch64 cross build
+        run: |
+          CC=aarch64-linux-gnu-gcc cmake -S . -B build-aarch64 -DUSE_HOST_LIBC=OFF \
+            -DAETHER_ARCH=aarch64 -DCMAKE_BUILD_TYPE=Release
+          cmake --build build-aarch64 -j"$(nproc)"
+          file build-aarch64/aether
+      - uses: actions/upload-artifact@v4
+        with:
+          name: aether-aarch64-nolibc
+          path: build-aarch64/aether
+
+  riscv64:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install deps
+        run: sudo apt-get update && sudo apt-get install -y cmake gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu
+      - name: nolibc riscv64 cross build
+        run: |
+          CC=riscv64-linux-gnu-gcc cmake -S . -B build-riscv64 -DUSE_HOST_LIBC=OFF \
+            -DAETHER_ARCH=riscv64 -DCMAKE_BUILD_TYPE=Release
+          cmake --build build-riscv64 -j"$(nproc)"
+          file build-riscv64/aether
+      - uses: actions/upload-artifact@v4
+        with:
+          name: aether-riscv64-nolibc
+          path: build-riscv64/aether
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [x86_64, i386, aarch64, riscv64]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+      - name: Flatten + checksums
+        run: |
+          cd dist
+          mv aether-x86_64-nolibc/aether aether-x86_64-nolibc
+          mv aether-i386-nolibc/aether aether-i386-nolibc
+          mv aether-aarch64-nolibc/aether aether-aarch64-nolibc
+          mv aether-riscv64-nolibc/aether aether-riscv64-nolibc
+          rm -rf aether-x86_64-nolibc aether-i386-nolibc aether-aarch64-nolibc aether-riscv64-nolibc
+          sha256sum aether-* > SHA256SUMS
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true
