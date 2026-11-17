@@ -22,4 +22,12 @@ initramfs/*.img
 /buildconfig
 /config
 /new_root
-/var/run
+/dev/
+/newroot/
+/proc/
+/run/
+/sys/
+/sysroot/
+/tmp/
+/var/
+/sbin/

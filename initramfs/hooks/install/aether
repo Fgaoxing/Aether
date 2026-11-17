@@ -14,6 +14,52 @@ build() {
     add_dir /newroot 0755
     # 引用配置里 MODULES=(nvme ...)；mkinitcpio 自动带上依赖（nvme-core/nvme-auth/nvme-keyring）
     add_module nvme
+
+    # —— 休眠恢复：自动探测 swap 并烘焙 /etc/aether/resume（内置，无需单独 hook）——
+    # 启动时 aether 在 cmdline 无 resume= 时回退到此文件，写入 /sys/power/resume，
+    # 所以休眠恢复不需要 cmdline 参数。AETHER_RESUME 可在构建期显式覆盖：
+    #   AETHER_RESUME=resume=UUID=…  或  AETHER_RESUME="resume=/dev/sda2 resume_offset=12345"
+    local resume_arg="" line src fstype
+    if [[ -n "${AETHER_RESUME:-}" ]]; then
+        resume_arg="$AETHER_RESUME"
+    elif [[ -r /etc/fstab ]]; then
+        while IFS= read -r line; do
+            line="${line%%#*}"
+            line="$(echo "$line" | sed -E 's/[[:space:]]+/ /g; s/^ //; s/ $//')"
+            set -- $line
+            src="$1"; fstype="$3"        # fstab 列: 1=src 2=mntpoint 3=fstype
+            [[ -n "$src" && -n "$fstype" ]] || continue
+            [[ "$fstype" == "swap" || "$fstype" == "swfs" ]] || continue
+            case "$src" in
+                UUID=*|LABEL=*|/dev/*)
+                    resume_arg="resume=$src"
+                    break ;;
+                /*)
+                    # swapfile：需要文件所在块设备 + 物理块偏移（页==块 4K 才支持）
+                    local dev blkno pagsz bsz
+                    pagsz="$(getconf PAGESIZE 2>/dev/null || echo 4096)"
+                    bsz="$(stat -f -c %S "$src" 2>/dev/null || echo 4096)"
+                    if [[ "$pagsz" == "$bsz" && "$pagsz" == "4096" ]]; then
+                        dev="$(findmnt -n -o SOURCE --target "$src" 2>/dev/null)"
+                        if [[ -n "$dev" ]]; then
+                            blkno="$(filefrag -v "$src" 2>/dev/null | awk '/^ *[0-9]+:/{print $4; exit}' | cut -d. -f1)"
+                            if [[ "$blkno" =~ ^[0-9]+$ ]]; then
+                                resume_arg="resume=$dev resume_offset=$blkno"
+                                break
+                            fi
+                        fi
+                    fi
+                    ;;
+            esac
+        done < /etc/fstab
+    fi
+    if [[ -n "$resume_arg" ]]; then
+        add_dir /etc/aether
+        add_file - /etc/aether/resume 644 <<RESUME_EOF
+$resume_arg
+RESUME_EOF
+        quiet "aether: hibernation resume baked into image ($resume_arg)"
+    fi
 }
 
 help() {
@@ -21,6 +67,9 @@ help() {
 An aether-powered rescue initramfs.
 All system interaction (proc/sys/devtmpfs mount, module load, uevent,
 root= resolution, pivot_root, execve) is handled by aether itself.
+Hibernation resume is auto-detected at build time and baked into the image
+as /etc/aether/resume (override with AETHER_RESUME at build time) — the boot
+code restores via /sys/power/resume when cmdline has no resume=/resume_offset=.
 HELPEOF
 }
 

@@ -84,11 +84,11 @@ The `aether` hook is the **only required hook**; everything else is à la carte
 
 | Hook | Purpose |
 | --- | --- |
-| `aether` | **required** — adds `/init` (aether), `/newroot`, `nvme` modules |
+| `aether` | **required** — adds `/init` (aether), `/newroot`, `nvme` modules; **built-in: sniffs `/etc/fstab` at image build time and bakes the swap UUID as `/etc/aether/resume`** — hibernation resume works with **no cmdline parameter** |
 | `aether-keyboard` | PS/2 + USB keyboard (`atkbd`/`i8042`/`serio_raw`/`usbhid`/`xhci-hcd`/`ehci-hcd`) |
 | `aether-usb` | USB host controllers, HID, USB storage |
 | `aether-network` | ~60 NIC drivers: Intel/Realtek/Broadcom + virtio/vmxnet3/Hyper-V + USB wired NICs — rescue gets DHCP + telnetd |
-| `aether-resume` | bakes `/etc/fstab` swap UUID into the image (`/etc/aether/resume`) — hibernation resume with **no cmdline parameter** |
+| `aether-resume` | **deprecated no-op** — hibernation resume auto-detection is built into the `aether` core hook (this hook only exists for backwards compatibility) |
 | `aether-microcode` | x86 microcode pruning ("base + local" strategy; ≈4.2 MiB instead of 14.6 MB) |
 | `aether-hostdrv` | build-host-only driver pruning (like `autodetect`, but strictly prunes; keeps USB wired NICs) |
 | `aether-everything` | common WiFi drivers + firmware (big; add only if needed) |
@@ -174,8 +174,9 @@ Manual: `netup [iface]` (one-shot) · `ifconfig eth0 up` / `ifconfig eth0 10.0.0
 
 #### Hibernation resume — no cmdline required
 
-The **aether-resume** hook scans `/etc/fstab` for a `swap` entry and bakes it into the
-image as `/etc/aether/resume`. At boot, PID 1 reads it whenever cmdline has no
+The **aether** hook scans `/etc/fstab` for a `swap` entry at image build time and bakes it into the
+image as `/etc/aether/resume` (override with `AETHER_RESUME=resume=UUID=…` or `AETHER_RESUME="resume=/dev/sda2 resume_offset=…"`
+at build time for building an image targeting another machine). At boot, PID 1 reads it whenever cmdline has no
 `resume=` / `resume_offset=`, resolves `UUID=` → major:minor, and writes
 `/sys/power/resume`. `resume=` / `noresume` on cmdline always win; file-swap entries use
 `filefrag` only when page size == fs block size (both 4096).
@@ -201,7 +202,7 @@ Verified up to the `/sys/power/resume` write on QEMU (2026-11-15); **full round-
   overwrites the swap header with the hibernation image header. aether's `swap_probe` detects both,
   so devices resolve correctly pre- and post-hibernate.
 - On a real machine, the **normal** Arch entry will not resume by itself unless it carries
-  `resume=UUID=…` on its cmdline **or** the normal image includes the `aether-resume` hook
+  `resume=UUID=…` on its cmdline **or** its image was built with the `aether` hook (which auto-bakes the fallback)
   (a normal boot with neither will silently wipe the stale image via `systemd-hibernate-clear.service`,
   which is exactly what "no effect" looked like). The recommended flow for an aether rescue entry:
   hibernate → boot the aether rescue entry → at the rescue prompt press `exit` (PID 1 performs
@@ -310,14 +311,18 @@ Design principles:
 
 - v0.1 — core shell + init flow
 - v0.2 — full rescue toolchain + PID 1 + EFI cmdline editing
+- v0.2.3 (2026-11-17) —
+  - **hibernation resume auto-detection now built into the `aether` core hook** (no separate hook needed);
+    `aether-resume` deprecated to a no-op for compatibility
+  - `AETHER_RESUME` build-time override
 - v0.2.2 (2026-11-17) —
   - `swapon` / `swapoff` applets
   - `swap_probe` recognizes hibernated swap (`S1SUSPEND`) alongside `SWAPSPACE2`/`SWAP-SPACE`
-  - `aether-resume` hook: `AETHER_RESUME` env override for explicit resume spec at build time
+  - `AETHER_RESUME` env override for explicit resume spec at build time
   - hibernation restore end-to-end verified on QEMU (session restored after poweroff→boot)
 - v0.2.1 (2026-11-15) —
   - zstd + gzip (de)compression; `zcat`; byte-exact vs official tools
-  - `resume=` hibernation support + **no-cmdline resume** via the `aether-resume` hook
+  - `resume=` hibernation support + **no-cmdline resume** via baked `/etc/aether/resume` (now built into the `aether` core hook)
   - `aether-microcode` (base + local pruning), `aether-everything`, `aether-hostdrv` hooks
   - DELETE-to-rescue background watch (evdev + console raw)
   - `aether_rescue` cmdline token → deterministic rescue

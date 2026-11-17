@@ -83,11 +83,11 @@ cmake -S . -B build-nolibc -DUSE_HOST_LIBC=OFF && cmake --build build-nolibc
 
 | Hook | 用途 |
 | --- | --- |
-| `aether` | **必需**——添加 `/init`（aether)、`/newroot`、`nvme` 模块 |
+| `aether` | **必需**——添加 `/init`（aether)、`/newroot`、`nvme` 模块；**内置：镜像构建时自动探测 `/etc/fstab` 里的 swap UUID 烘焙进 `/etc/aether/resume`**——休眠恢复**无需 cmdline 参数** |
 | `aether-keyboard` | PS/2 + USB 键盘（`atkbd`/`i8042`/`serio_raw`/`usbhid`/`xhci-hcd`/`ehci-hcd`） |
 | `aether-usb` | USB 主控、HID、USB 存储 |
 | `aether-network` | 约 60 个网卡驱动：Intel/Realtek/Broadcom + virtio/vmxnet3/Hyper-V + USB 有线网卡——救援即可 DHCP + telnetd |
-| `aether-resume` | 把 `/etc/fstab` 中的 swap UUID 烘焙进镜像（`/etc/aether/resume`)——**无需 cmdline 参数**即可休眠恢复 |
+| `aether-resume` | **deprecated no-op**——休眠恢复自动检测已内置到 `aether` 核心 hook（本 hook 仅为兼容保留） |
 | `aether-microcode` | x86 微码裁剪（"base + local"策略；约 4.2 MiB，原 14.6 MB） |
 | `aether-hostdrv` | 仅当前构建机器的驱动裁剪（类似 `autodetect`，但只做减法；USB 有线网卡始终保留） |
 | `aether-everything` | 常见 WiFi 驱动 + 固件（体积大，确实需要再加） |
@@ -170,8 +170,9 @@ PID 1 很早就 fork 一个**后台监视器**，与启动并行监听键盘/控
 
 #### 休眠恢复 —— 不需要 cmdline 参数
 
-**aether-resume** hook 会扫描 `/etc/fstab` 中的 `swap` 条目，并把它烘焙进镜像的
-`/etc/aether/resume`。启动时，当 cmdline 没有 `resume=` / `resume_offset=`，PID 1 读取它，
+**aether** hook 在镜像构建时扫描 `/etc/fstab` 中的 `swap` 条目，并把它烘焙进镜像的
+`/etc/aether/resume`（可用 `AETHER_RESUME=resume=UUID=…` 或 `AETHER_RESUME="resume=/dev/sda2 resume_offset=…"`
+构建期覆盖——用于给别的机器构建镜像）。启动时，当 cmdline 没有 `resume=` / `resume_offset=`，PID 1 读取它，
 把 `UUID=` 解析为 major:minor 后写入 `/sys/power/resume`。cmdline 上的
 `resume=` / `noresume` 始终优先；文件型 swap 仅在页大小 == 文件系统块大小（都是 4096）时
 才用 `filefrag`。
@@ -196,7 +197,7 @@ PID 1 在 uevent 排空后还会填充 **`/dev/disk/by-uuid/<uuid> -> ../../<dev
 - 休眠后 swap offset 4086 的签名变成 `S1SUSPEND`（不是 `SWAPSPACE2`)——内核会用休眠镜像头覆盖
   swap 头。aether 的 `swap_probe` 两种都识别，所以休眠前后都能定位设备。
 - 真实机器上，**普通** Arch 启动项不会自动恢复：除非 cmdline 带 `resume=UUID=…` 或者普通镜像
-  里也包含 `aether-resume` hook（两者都没有时，正常启动会被 `systemd-hibernate-clear.service`
+  镜像是用 `aether` hook 构建的（自动烘焙 fallback，两者都没有时，正常启动会被 `systemd-hibernate-clear.service`
   悄悄清掉残余镜像——这正是"和没有一样"的表象）。推荐在 aether 救援入口的用法：休眠 → 从 aether
   救援入口启动 → 在救援提示符下按 `exit`(PID 1 在重试前完成 resume 写入，早于启动流程）→
   内核在恢复点直接切回之前的会话。这就是上面 QEMU 端到端验证的路径。
@@ -302,14 +303,18 @@ python3 tools/pty_test.py ./build-nolibc/aether                           # 交�
 
 - v0.1 —— 核心 shell + init 流程
 - v0.2 —— 完整救援工具链 + PID 1 + EFI cmdline 编辑
+- v0.2.3 (2026-11-17) ——
+  - **休眠恢复自动检测并入 `aether` 核心 hook**（不再需要单独 hook）
+  - `aether-resume` 弃用为 no-op（兼容保留）
+  - `AETHER_RESUME` 构建期覆盖
 - v0.2.2 (2026-11-17) ——
   - `swapon` / `swapoff` applet
   - `swap_probe` 识别休眠态 swap(`S1SUSPEND`，与 `SWAPSPACE2`/`SWAP-SPACE` 并列）
-  - `aether-resume` hook:`AETHER_RESUME` 环境变量构建期显式指定 resume spec
+  - `AETHER_RESUME` 环境变量构建期显式指定 resume spec
   - 休眠恢复端到端验证通过（QEMU：掉电→再启动→内核恢复会话）
 - v0.2.1 (2026-11-15) ——
   - zstd + gzip 压缩/解压；`zcat`；与官方工具字节级一致
-  - `resume=` 休眠支持 + **无 cmdline 休眠恢复**（`aether-resume` hook)
+  - `resume=` 休眠支持 + **无 cmdline 休眠恢复**（烘焙进 `/etc/aether/resume`，现已内置到 `aether` 核心 hook）
   - `aether-microcode`（base + local 裁剪）、`aether-everything`、`aether-hostdrv` hook
   - DELETE-to-rescue 后台监视器（evdev + 控制台原始模式）
   - `aether_rescue` cmdline token → 确定性救援
