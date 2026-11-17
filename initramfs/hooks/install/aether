@@ -2,14 +2,24 @@
 # aether 救援镜像的 mkinitcpio install hook
 # 把 build-nolibc/aether 放成镜像的 /init（PID 1），不依赖 busybox/udev/glibc。
 build() {
-    local repo
-    repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
-    if [[ ! -x "${repo}/build-nolibc/aether" ]]; then
-        error "aether 二进制不存在: %s（先 cmake -S . -B build-nolibc -DUSE_HOST_LIBC=OFF && cmake --build build-nolibc）" "${repo}/build-nolibc/aether"
+    # 二进制解析顺序：1) 仓库相对路径（仓库内 mkinitcpio，开发流程，用刚编译的）
+    #                 2) /usr/bin/aether（独立安装，如 /etc/initcpio/install/aether）
+    local bin repo_bin
+    repo_bin="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)/build-nolibc/aether"
+    if [[ -x "$repo_bin" ]]; then
+        bin="$repo_bin"
+    elif [[ -x /usr/bin/aether ]]; then
+        bin="/usr/bin/aether"
+    else
+        bin="$repo_bin"
+    fi
+    if [[ ! -x "$bin" ]]; then
+        error "aether 二进制不存在: %s" "$bin"
         return 1
     fi
+    quiet "aether: using binary $bin"
     # /init 就是 aether（PID 1 → aether_init_main）
-    add_file "${repo}/build-nolibc/aether" /init 0755
+    add_file "$bin" /init 0755
     # pivot_root 挂载点（内核挂 proc/sys/dev 到新根时目标必须存在）
     add_dir /newroot 0755
     # 引用配置里 MODULES=(nvme ...)；mkinitcpio 自动带上依赖（nvme-core/nvme-auth/nvme-keyring）
