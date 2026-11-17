@@ -1,5 +1,7 @@
 # aether
 
+[![build](https://github.com/Fgaoxing/Aether/actions/workflows/build.yml/badge.svg)](https://github.com/Fgaoxing/Aether/actions/workflows/build.yml)
+
 [中文](README.zh-CN.md)
 
 **aether** is a BusyBox-style rescue toolbox for Linux initramfs: one single, static binary
@@ -220,7 +222,29 @@ sudo ./tools/register-aether-efi.sh --add-rescue-entry   # one always-rescue ent
 sudo ./tools/register-aether-efi.sh --list / --uninstall / --dry-run
 ```
 
-### Known limitations
+### Packaging & CI
+
+**GitHub Actions** (`.github/workflows/build.yml`) builds on every push/PR and on tags:
+
+| job | what it does |
+| --- | --- |
+| `x86_64` | host-libc build + `ctest` + nolibc static build |
+| `i386` | nolibc static cross-build (clang `--target=i386-unknown-linux-gnu`) |
+| `aarch64` | nolibc static cross-build (`aarch64-linux-gnu-gcc`) |
+| `riscv64` | nolibc static cross-build (`riscv64-linux-gnu-gcc`) |
+| `release` (tag `v*` only) | creates a GitHub Release with `aether-{x86_64,i386,aarch64,riscv64}-nolibc` + `SHA256SUMS` |
+
+**AUR packaging templates** (not yet on the AUR — publish via `packaging/aur/README.md`):
+
+| package | how it builds |
+| --- | --- |
+| `aether-git` | builds from git HEAD; static nolibc binary, no runtime deps |
+| `aether-bin` | prebuilt static nolibc binary + hooks from a GitHub Release |
+
+Both install `/usr/bin/aether` and the mkinitcpio install hooks into `/usr/lib/initcpio/install/`,
+and conflict with each other (both `provide=('aether')`).
+
+## Known limitations
 
 - No syntax highlighting; `less` has no search; the editor has no undo/search
 - All times are UTC; `ls -l` does not sort (disk order)
@@ -267,6 +291,8 @@ root-tested on real hardware — verify in a sacrificial VM first.
 
 ```
 CMakeLists.txt          dual-branch build (host libc / nolibc) + arch normalization
+.github/workflows/      CI (build on push/PR/tag, release artifacts on tags)
+packaging/aur/          AUR templates (aether-git, aether-bin)
 src/
   main.c                entry point; PID 1 → aether_init_main()
   boot.c/h              init: cmdline parse / root resolve / boot flow / rescue commands
@@ -311,6 +337,9 @@ Design principles:
 
 - v0.1 — core shell + init flow
 - v0.2 — full rescue toolchain + PID 1 + EFI cmdline editing
+- v0.2.4 (2026-11-17) —
+  - GitHub Actions CI: x86_64 libc+tests, nolibc, i386/aarch64/riscv64 cross-builds, release artifacts on tags
+  - AUR templates (`aether-git`, `aether-bin`) under `packaging/aur/`
 - v0.2.3 (2026-11-17) —
   - **hibernation resume auto-detection now built into the `aether` core hook** (no separate hook needed);
     `aether-resume` deprecated to a no-op for compatibility

@@ -1,5 +1,7 @@
 # aether · Aether 救援工具箱
 
+[![build](https://github.com/Fgaoxing/Aether/actions/workflows/build.yml/badge.svg)](https://github.com/Fgaoxing/Aether/actions/workflows/build.yml)
+
 [English](README.md)
 
 **aether** 是一个 BusyBox 风格、用于 Linux initramfs 的救援工具箱：**单一静态二进制**，
@@ -213,7 +215,29 @@ sudo ./tools/register-aether-efi.sh --add-rescue-entry   # 注册唯一的"永�
 sudo ./tools/register-aether-efi.sh --list / --uninstall / --dry-run
 ```
 
-### 已知限制
+### 打包与 CI
+
+**GitHub Actions**（`.github/workflows/build.yml`）在每次 push/PR 和打 tag 时构建：
+
+| job | 内容 |
+| --- | --- |
+| `x86_64` | host libc 构建 + `ctest` + nolibc 静态构建 |
+| `i386` | nolibc 静态交叉构建（clang `--target=i386-unknown-linux-gnu`) |
+| `aarch64` | nolibc 静态交叉构建（`aarch64-linux-gnu-gcc`) |
+| `riscv64` | nolibc 静态交叉构建（`riscv64-linux-gnu-gcc`) |
+| `release`(tag `v*` 时） | 创建 GitHub Release，包含 `aether-{x86_64,i386,aarch64,riscv64}-nolibc` + `SHA256SUMS` |
+
+**AUR 打包模板**（尚未提交到 AUR——见 `packaging/aur/README.md` 提交方法）：
+
+| 包 | 构建方式 |
+| --- | --- |
+| `aether-git` | 从 git HEAD 构建；静态 nolibc 二进制，无运行时依赖 |
+| `aether-bin` | 预编译静态 nolibc 二进制 + 来自 GitHub Release 的 hook |
+
+两个包都安装 `/usr/bin/aether`，并把 mkinitcpio install hook 安装到 `/usr/lib/initcpio/install/`,
+互斥（都 `provide=('aether')`）。
+
+## 已知限制
 
 - 无语法高亮；`less` 不支持搜索；编辑器无撤销/搜索
 - 所有时间均为 UTC；`ls -l` 不排序（磁盘顺序）
@@ -259,6 +283,8 @@ dm-crypt/LVM swap 场景的 resume；物理 VT 上 USB HID 的 DELETE 键。
 
 ```
 CMakeLists.txt          双分支构建（host libc / nolibc）+ 架构归一化
+.github/workflows/      CI（push/PR/tag 构建，tag 时发布产物）
+packaging/aur/          AUR 模板（aether-git、aether-bin）
 src/
   main.c                入口点；PID 1 → aether_init_main()
   boot.c/h              init：cmdline 解析 / root 解析 / 启动流程 / 救援命令
@@ -303,6 +329,9 @@ python3 tools/pty_test.py ./build-nolibc/aether                           # 交�
 
 - v0.1 —— 核心 shell + init 流程
 - v0.2 —— 完整救援工具链 + PID 1 + EFI cmdline 编辑
+- v0.2.4 (2026-11-17) ——
+  - GitHub Actions CI:x86_64 libc+测试、nolibc;i386/aarch64/riscv64 交叉构建；tag 时发布产物
+  - AUR 模板（`aether-git`、`aether-bin`),`packaging/aur/`
 - v0.2.3 (2026-11-17) ——
   - **休眠恢复自动检测并入 `aether` 核心 hook**（不再需要单独 hook）
   - `aether-resume` 弃用为 no-op（兼容保留）

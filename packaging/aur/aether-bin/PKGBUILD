@@ -1,0 +1,44 @@
+# Maintainer: Fgaoxing <Fgaoxing0206@163.com>
+# AUR: prebuilt nolibc static binary from GitHub Releases (no build tool needed).
+# NOTE: after tagging a release (git tag vX.Y.Z && git push --tags), fill in the
+# sha256sums below from dist/SHA256SUMS.
+pkgname=aether-bin
+pkgver=0.4.0
+pkgrel=1
+pkgdesc="Initramfs rescue shell toolbox: PID 1 init flow + BusyBox-style rescue applets (prebuilt static nolibc binary)"
+arch=('x86_64')
+url="https://github.com/Fgaoxing/Aether"
+license=('MIT')
+depends=()
+provides=('aether')
+conflicts=('aether-git')
+install=aether-bin.install
+source=("$url/releases/download/v${pkgver}/aether-${CARCH}-nolibc"
+        "$url/archive/refs/tags/v${pkgver}.tar.gz"
+        "LICENSE::$url/raw/v${pkgver}/LICENSE")
+sha256sums=('SKIP'  # TODO: fill in from dist/SHA256SUMS after first release
+            'SKIP'  # TODO: fill in from the GitHub archive tarball
+            'SKIP') # TODO: fill in from dist/SHA256SUMS after first release
+
+_src=""
+
+pkgver_scan() {
+	: # placeholder for future tag-based scans; pkgver is pinned above
+}
+
+prepare() {
+	_src="$(echo "$srcdir"/Aether-*/ | head -1)"
+}
+
+package() {
+	prepare
+	install -Dm755 "$srcdir/aether-${CARCH}-nolibc" "$pkgdir/usr/bin/aether"
+	install -Dm644 "$srcdir/LICENSE" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+
+	# mkinitcpio install hooks: 打包到 /usr/lib/initcpio/install（用户覆盖放 /etc/initcpio/install）
+	local hook_dir hook
+	hook_dir="$_src/initramfs/hooks/install"
+	for hook in "$hook_dir"/*; do
+		install -Dm755 "$hook" "$pkgdir/usr/lib/initcpio/install/$(basename "$hook")"
+	done
+}
