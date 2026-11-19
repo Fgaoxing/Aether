@@ -26,7 +26,7 @@ jobs:
 
       - name: Install build deps
         run: |
-          pacman -Sy --noconfirm git cmake python zstd wget
+          pacman -Syu --noconfirm git cmake python zstd
 
       - name: Setup SSH for AUR
         env:
