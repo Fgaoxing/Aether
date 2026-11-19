@@ -49,6 +49,13 @@ jobs:
           git config --global user.name "Fgaoxing"
           git config --global user.email "${AUR_GIT_USER:-Fgaoxing0206@163.com}"
 
+      - name: Debug AUR SSH
+        run: |
+          echo "HOME=$HOME user=$(id)"
+          ls -la ~/.ssh
+          cat ~/.ssh/config
+          ssh -vvv -o BatchMode=yes aur@aur.archlinux.org help </dev/null 2>&1 | tail -40
+
       - name: Compute versions
         run: |
           vtag=""
