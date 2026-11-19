@@ -49,7 +49,7 @@ jobs:
           git fetch --tags --force
           desc=$(git describe --tags --long --match 'v*' 2>/dev/null || true)
           if [ -n "$desc" ]; then
-            pkgver_git=$(printf '%s' "$desc" | sed -E 's/^v//; s/\([^-]*\)-g\(.*\)$/r\1.g\2/; s/-/./g')
+            pkgver_git=$(printf '%s' "$desc" | sed -E 's/^v//; s/-([0-9]+)-g/.r\1.g/; s/-/./g')
           else
             pkgver_git="$vtag"
           fi
