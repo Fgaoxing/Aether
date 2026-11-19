@@ -22,7 +22,7 @@ jobs:
     steps:
       - name: Install build deps
         run: |
-          pacman -Syu --noconfirm git cmake python zstd
+          pacman -Syu --noconfirm git cmake python zstd openssh
 
       - name: Clone repo (need git history for `git describe`)
         run: |
