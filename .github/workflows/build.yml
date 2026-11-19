@@ -96,11 +96,10 @@ jobs:
       - name: Flatten + checksums
         run: |
           cd dist
-          mv aether-x86_64-nolibc/aether aether-x86_64-nolibc
-          mv aether-i386-nolibc/aether aether-i386-nolibc
-          mv aether-aarch64-nolibc/aether aether-aarch64-nolibc
-          mv aether-riscv64-nolibc/aether aether-riscv64-nolibc
-          rm -rf aether-x86_64-nolibc aether-i386-nolibc aether-aarch64-nolibc aether-riscv64-nolibc
+          mv aether-x86_64-nolibc/aether tmp-x86_64 && rmdir aether-x86_64-nolibc && mv tmp-x86_64 aether-x86_64-nolibc
+          mv aether-i386-nolibc/aether tmp-i386 && rmdir aether-i386-nolibc && mv tmp-i386 aether-i386-nolibc
+          mv aether-aarch64-nolibc/aether tmp-aarch64 && rmdir aether-aarch64-nolibc && mv tmp-aarch64 aether-aarch64-nolibc
+          mv aether-riscv64-nolibc/aether tmp-riscv64 && rmdir aether-riscv64-nolibc && mv tmp-riscv64 aether-riscv64-nolibc
           sha256sum aether-* > SHA256SUMS
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
