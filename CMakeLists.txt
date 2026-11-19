@@ -6,7 +6,7 @@ project(aether C ASM)
 option(USE_HOST_LIBC "Use host libc syscall wrapper (local build). OFF = official nolibc static package (-nostdlib, only x86_64/aarch64/i386/riscv64)" ON)
 option(AETHER_BUILD_TESTS "Build host unit tests (libc build only)" ON)
 set(AETHER_ARCH "" CACHE STRING "Target arch override: x86_64|aarch64|i386|riscv64 (default: CMAKE_SYSTEM_PROCESSOR, normalized)")
-set(AETHER_VERSION "0.4.0" CACHE STRING "Version string embedded in the binary")
+set(AETHER_VERSION "1.0.0" CACHE STRING "Version string embedded in the binary")
 
 # --- 架构归一（§11）：AMD64/x64→x86_64；aarch64/arm64→aarch64；i386/i486/i586/i686→i386；riscv64/riscv→riscv64 ---
 string(TOLOWER "${CMAKE_SYSTEM_PROCESSOR}" _proc)

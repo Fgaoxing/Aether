@@ -327,6 +327,10 @@ python3 tools/pty_test.py ./build-nolibc/aether                           # 交�
 
 ### Milestones
 
+- v1.0.0 (2026-11-19) —— 首个 tagged release：完整 PID 1 init 流程（root 解析/挂载/pivot/execve)、
+  任一环节失败即进救援、`aether_rescue` 确定性进入、启动时 DELETE 后台监视器、完整救援工具箱
+  (65 个 applet + 18 个 builtin，覆盖文件/文本/hex/网络/磁盘）、DHCP + telnetd 端到端（含热插网卡自动配置）、
+  休眠恢复零 cmdline（自动探测、端到端验证）、全英文输出、GitHub Actions CI(x86_64/i386/aarch64/riscv64)+ AUR 模板
 - v0.1 —— 核心 shell + init 流程
 - v0.2 —— 完整救援工具链 + PID 1 + EFI cmdline 编辑
 - v0.2.4 (2026-11-17) ——

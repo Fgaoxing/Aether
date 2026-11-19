@@ -15,7 +15,7 @@
 #include "util.h"
 
 #ifndef AETHER_VERSION
-#define AETHER_VERSION "0.2.0-m1"
+#define AETHER_VERSION "1.0.0"
 #endif
 
 #define EXIT_NOTIMPL 127

@@ -3,7 +3,7 @@
 # NOTE: after tagging a release (git tag vX.Y.Z && git push --tags), fill in the
 # sha256sums below from dist/SHA256SUMS.
 pkgname=aether-bin
-pkgver=0.4.0
+pkgver=1.0.0
 pkgrel=1
 pkgdesc="Initramfs rescue shell toolbox: PID 1 init flow + BusyBox-style rescue applets (prebuilt static nolibc binary)"
 arch=('x86_64')

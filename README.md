@@ -335,6 +335,11 @@ Design principles:
 
 ### Milestones
 
+- v1.0.0 (2026-11-19) — first tagged release: full PID 1 init flow (root parse/resolve/mount/pivot/execve),
+  rescue on every failure, `aether_rescue` deterministic rescue, boot-time DELETE watcher, full rescue toolbox
+  (65 applets + 18 builtins across file/text/hex/network/disk), DHCP + telnetd end-to-end (incl. hotplug auto-config),
+  hibernation resume with zero cmdline params (auto-detected, end-to-end verified), English output,
+  GitHub Actions CI (x86_64/i386/aarch64/riscv64) + AUR templates
 - v0.1 — core shell + init flow
 - v0.2 — full rescue toolchain + PID 1 + EFI cmdline editing
 - v0.2.4 (2026-11-17) —

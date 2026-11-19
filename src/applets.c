@@ -8,7 +8,7 @@
 #include "syscall_shim.h"
 
 #ifndef AETHER_VERSION
-#define AETHER_VERSION "0.2.0-m1"
+#define AETHER_VERSION "1.0.0"
 #endif
 
 static int cmd_help(int argc, char **argv, char **envp);

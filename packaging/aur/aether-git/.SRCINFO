@@ -1,6 +1,6 @@
 pkgbase = aether-git
 	pkgdesc = Initramfs rescue shell toolbox: PID 1 init flow + BusyBox-style rescue applets (pure C, static nolibc)
-	pkgver = 0.4.0.r0.g364c79f
+	pkgver = 1.0.0
 	pkgrel = 1
 	url = https://github.com/Fgaoxing/Aether
 	arch = x86_64

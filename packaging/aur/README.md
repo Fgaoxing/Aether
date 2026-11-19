@@ -35,7 +35,7 @@ Requires a published GitHub Release (push a tag `vX.Y.Z` — the CI workflow bui
 `aether-x86_64-nolibc` and `SHA256SUMS` automatically):
 
 ```sh
-git tag v0.4.0 && git push --tags         # releases are built by CI on tag push
+git tag v1.0.0 && git push --tags         # releases are built by CI on tag push
 # once the release exists, download dist/SHA256SUMS and fill in sha256sums=(...) in PKGBUILD
 git clone ssh://aur@aur.archlinux.org/aether-bin.git
 cp packaging/aur/aether-bin/{PKGBUILD,.SRCINFO,aether-bin.install} aether-bin/
