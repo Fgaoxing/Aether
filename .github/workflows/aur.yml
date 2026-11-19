@@ -34,7 +34,6 @@ jobs:
       - name: Setup SSH for AUR
         env:
           AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
-          AUR_KNOWN_HOSTS: ${{ secrets.AUR_KNOWN_HOSTS }}
           AUR_GIT_USER: ${{ secrets.AUR_GIT_USER }}
         run: |
           set -e
@@ -45,13 +44,11 @@ jobs:
           chmod 700 ~/.ssh
           printf '%s\n' "$AUR_SSH_PRIVATE_KEY" > ~/.ssh/id_aur
           chmod 600 ~/.ssh/id_aur
-          printf 'Host aur.archlinux.org\n  IdentityFile ~/.ssh/id_aur\n  User aur\n  IdentitiesOnly yes\n' > ~/.ssh/config
+          printf 'Host aur.archlinux.org\n  IdentityFile ~/.ssh/id_aur\n  User aur\n  IdentitiesOnly yes\n  StrictHostKeyChecking yes\n' > ~/.ssh/config
           chmod 600 ~/.ssh/config
-          if [ -n "$AUR_KNOWN_HOSTS" ]; then
-            printf '%s\n' "$AUR_KNOWN_HOSTS" > ~/.ssh/known_hosts
-          else
-            ssh-keyscan -t ed25519,ecdsa aur.archlinux.org > ~/.ssh/known_hosts 2>&1
-          fi
+          ssh-keyscan -t ed25519,ecdsa aur.archlinux.org > ~/.ssh/known_hosts 2>&1
+          # verify: must list commands, proves key+host are OK
+          ssh -o BatchMode=yes aur@aur.archlinux.org help </dev/null
           git config --global user.name "Fgaoxing"
           git config --global user.email "${AUR_GIT_USER:-Fgaoxing0206@163.com}"
 
