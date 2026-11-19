@@ -46,15 +46,17 @@ jobs:
           chmod 600 ~/.ssh/id_aur
           printf 'Host aur.archlinux.org\n  IdentityFile ~/.ssh/id_aur\n  User aur\n  IdentitiesOnly yes\n  StrictHostKeyChecking no\n  UserKnownHostsFile /dev/null\n' > ~/.ssh/config
           chmod 600 ~/.ssh/config
+          # openssh resolves ~ via passwd, not $HOME carriage — mirror files for both roots
+          PWH="$(python3 -c 'import pwd;print(pwd.getpwuid(0).pw_dir)')"
+          if [ "$PWH" != "$HOME" ]; then
+            mkdir -p "$PWH/.ssh"
+            chmod 700 "$PWH/.ssh"
+            cp ~/.ssh/id_aur ~/.ssh/config "$PWH/.ssh/"
+            chmod 600 "$PWH/.ssh/id_aur" "$PWH/.ssh/config"
+          fi
+          echo "GIT_SSH_COMMAND=ssh -F $PWH/.ssh/config" >> "$GITHUB_ENV"
           git config --global user.name "Fgaoxing"
           git config --global user.email "${AUR_GIT_USER:-Fgaoxing0206@163.com}"
-
-      - name: Debug AUR SSH
-        run: |
-          echo "HOME=$HOME user=$(id)"
-          ls -la ~/.ssh
-          cat ~/.ssh/config
-          ssh -vvv -o BatchMode=yes aur@aur.archlinux.org help </dev/null 2>&1 | tail -40
 
       - name: Compute versions
         run: |
