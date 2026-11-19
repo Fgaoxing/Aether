@@ -31,3 +31,6 @@ initramfs/*.img
 /tmp/
 /var/
 /sbin/
+
+__pycache__/
+*.pyc
