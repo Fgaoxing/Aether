@@ -1,0 +1,69 @@
+# Publish AUR packages (-git, -bin) on tag push.
+# Requires these secrets to be set in repo settings (see packaging/aur/README.md):
+#   AUR_SSH_PRIVATE_KEY  — dedicated AUR SSH private key (passphrase-less)
+#   AUR_KNOWN_HOSTS      — optional pinned host key line (ssh-keyscan output). If unset, falls back to ssh-keyscan.
+#   AUR_GIT_USER         — git committer identity for the AUR push (defaults to "Fgaoxing <Fgaoxing0206@163.com>")
+name: publish-aur
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+jobs:
+  aur:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup SSH for AUR
+        env:
+          AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+          AUR_KNOWN_HOSTS: ${{ secrets.AUR_KNOWN_HOSTS }}
+          AUR_GIT_USER: ${{ secrets.AUR_GIT_USER }}
+        run: |
+          set -e
+          if [ -z "$AUR_SSH_PRIVATE_KEY" ]; then
+            echo "secret AUR_SSH_PRIVATE_KEY is not set"; exit 1
+          fi
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          printf '%s\n' "$AUR_SSH_PRIVATE_KEY" > ~/.ssh/id_aur
+          chmod 600 ~/.ssh/id_aur
+          printf 'Host aur.archlinux.org\n  IdentityFile ~/.ssh/id_aur\n  User aur\n  IdentitiesOnly yes\n' > ~/.ssh/config
+          chmod 600 ~/.ssh/config
+          if [ -n "$AUR_KNOWN_HOSTS" ]; then
+            printf '%s\n' "$AUR_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          else
+            ssh-keyscan -t ed25519,ecdsa aur.archlinux.org > ~/.ssh/known_hosts 2>&1
+          fi
+          git config --global user.name "Fgaoxing"
+          git config --global user.email "${AUR_GIT_USER:-Fgaoxing0206@163.com}"
+
+      - name: Compute versions
+        run: |
+          vtag="${GITHUB_REF_NAME#v}"
+          echo "VTAG=$vtag" >> "$GITHUB_ENV"
+          git fetch --tags --force
+          desc=$(git describe --tags --long --match 'v*' 2>/dev/null || true)
+          if [ -n "$desc" ]; then
+            pkgver_git=$(printf '%s' "$desc" | sed -E 's/^v//; s/\([^-]*\)-g\(.*\)$/r\1.g\2/; s/-/./g')
+          else
+            pkgver_git="$vtag"
+          fi
+          echo "PKGVER_GIT=$pkgver_git" >> "$GITHUB_ENV"
+          echo "git pkgver:     $pkgver_git"
+          echo "bin vtag:       $vtag"
+
+      - name: Prepare package files
+        run: |
+          python3 packaging/aur/aur_tool.py prepare-git "$PKGVER_GIT"
+          python3 packaging/aur/aur_tool.py prepare-bin "$VTAG"
+
+      - name: Push aether-git
+        run: PKGVER="$PKGVER_GIT" python3 packaging/aur/aur_tool.py push aether-git
+
+      - name: Push aether-bin
+        run: PKGVER="$VTAG" python3 packaging/aur/aur_tool.py push aether-bin
