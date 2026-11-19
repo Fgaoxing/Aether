@@ -1,8 +1,12 @@
-# Publish AUR packages (-git, -bin) on tag push.
-# Requires these secrets to be set in repo settings (see packaging/aur/README.md):
-#   AUR_SSH_PRIVATE_KEY  — dedicated AUR SSH private key (passphrase-less)
-#   AUR_KNOWN_HOSTS      — optional pinned host key line (ssh-keyscan output). If unset, falls back to ssh-keyscan.
-#   AUR_GIT_USER         — git committer identity for the AUR push (defaults to "Fgaoxing <Fgaoxing0206@163.com>")
+# Publish AUR packages (aether-rescue-git, aether-rescue-bin) on tag push or manual dispatch.
+# Runs inside archlinux:base-devel so makepkg is available — CI both verifies the PKGBUILDs
+# build cleanly and pushes the exact .SRCINFO produced by makepkg, so the AUR package page
+# always shows the real version.
+#
+# Requires secrets (see packaging/aur/README.md):
+#   AUR_SSH_PRIVATE_KEY — dedicated AUR SSH private key (passphrase-less; multiple keys supported)
+#   AUR_KNOWN_HOSTS     — optional pinned host key (ssh-keyscan output); falls back to ssh-keyscan
+#   AUR_GIT_USER        — committer identity on the AUR commit (default: Fgaoxing <Fgaoxing0206@163.com>)
 name: publish-aur
 
 on:
@@ -13,10 +17,16 @@ on:
 jobs:
   aur:
     runs-on: ubuntu-latest
+    container:
+      image: archlinux:base-devel
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      - name: Install build deps
+        run: |
+          pacman -Sy --noconfirm git cmake python zstd wget
 
       - name: Setup SSH for AUR
         env:
@@ -48,28 +58,37 @@ jobs:
           if [ "$GITHUB_REF_TYPE" = "tag" ]; then
             vtag="${GITHUB_REF_NAME#v}"
           else
-            vtag="$(git describe --tags --abbrev=0 --match 'v*' 2>/dev/null | sed 's/^v//')"
+            vtag="$(git describe --tags --abbrev=0 --match 'v*' | sed 's/^v//')"
           fi
           [ -n "$vtag" ] || { echo "no v* tag found"; exit 1; }
           echo "VTAG=$vtag" >> "$GITHUB_ENV"
           git fetch --tags --force
-          desc=$(git describe --tags --long --match 'v*' 2>/dev/null || true)
-          if [ -n "$desc" ]; then
-            pkgver_git=$(printf '%s' "$desc" | sed -E 's/^v//; s/-([0-9]+)-g/.r\1.g/; s/-/./g')
-          else
-            pkgver_git="$vtag"
-          fi
+          desc=$(git describe --tags --long --match 'v*')
+          pkgver_git=$(printf '%s' "$desc" | sed -E 's/^v//; s/-([0-9]+)-g/.r\1.g/; s/-/./g')
           echo "PKGVER_GIT=$pkgver_git" >> "$GITHUB_ENV"
-          echo "git pkgver:     $pkgver_git"
-          echo "bin vtag:       $vtag"
+          echo "git pkgver:  $pkgver_git"
+          echo "bin vtag:    $vtag"
 
-      - name: Prepare package files
+      - name: Verify and publish aether-rescue-git
         run: |
-          python3 packaging/aur/aur_tool.py prepare-git "$PKGVER_GIT"
-          python3 packaging/aur/aur_tool.py prepare-bin "$VTAG"
+          set -e
+          cd packaging/aur/aether-rescue-git
+          sed -i "s/^pkgver=.*/pkgver=$PKGVER_GIT/" PKGBUILD
+          makepkg --printsrcinfo > .SRCINFO
+          makepkg -s --noconfirm
+          rm -f *.pkg.tar.zst *-debug.pkg.tar.zst
 
-      - name: Push aether-git
-        run: PKGVER="$PKGVER_GIT" python3 packaging/aur/aur_tool.py push aether-git
+      - name: Verify and publish aether-rescue-bin
+        run: |
+          set -e
+          cd packaging/aur/aether-rescue-bin
+          sed -i "s/^pkgver=.*/pkgver=$VTAG/" PKGBUILD
+          makepkg --printsrcinfo > .SRCINFO
+          makepkg -s --noconfirm
+          rm -f *.pkg.tar.zst *-debug.pkg.tar.zst
 
-      - name: Push aether-bin
-        run: PKGVER="$VTAG" python3 packaging/aur/aur_tool.py push aether-bin
+      - name: Push aether-rescue-git
+        run: PKGVER="$PKGVER_GIT" python3 packaging/aur/aur_tool.py push aether-rescue-git
+
+      - name: Push aether-rescue-bin
+        run: PKGVER="$VTAG" python3 packaging/aur/aur_tool.py push aether-rescue-bin

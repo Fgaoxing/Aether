@@ -54,18 +54,18 @@ def sha256_url(url):
 
 
 def prepare_git(pkgver):
-    d = os.path.join(HERE, "aether-git")
+    d = os.path.join(HERE, "aether-rescue-git")
     pkgbuild = os.path.join(d, "PKGBUILD")
     srcinfo = os.path.join(d, ".SRCINFO")
 
     write(pkgbuild, set_version_pkgbuild(read(pkgbuild), pkgver))
     write(srcinfo, set_version_srcinfo(read(srcinfo), pkgver))
-    print("aether-git: pkgver ->", pkgver)
+    print("aether-rescue-git: pkgver ->", pkgver)
 
 
 def prepare_bin(vtag):
     pkgver = vtag
-    d = os.path.join(HERE, "aether-bin")
+    d = os.path.join(HERE, "aether-rescue-bin")
     pkgbuild = os.path.join(d, "PKGBUILD")
     srcinfo = os.path.join(d, ".SRCINFO")
 
@@ -94,7 +94,7 @@ def prepare_bin(vtag):
             line = "\tsha256sums = " + next(hashes)
         out_lines.append(line)
     write(srcinfo, "\n".join(out_lines) + "\n")
-    print("aether-bin: pkgver ->", pkgver)
+    print("aether-rescue-bin: pkgver ->", pkgver)
 
 
 def push(pkgname):

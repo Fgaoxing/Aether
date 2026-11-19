@@ -1,6 +1,6 @@
 # Maintainer: Fgaoxing <Fgaoxing0206@163.com>
 # AUR: prebuilt nolibc static binary from GitHub Releases (no build tool needed).
-pkgname=aether-bin
+pkgname=aether-rescue-bin
 pkgver=1.0.0
 pkgrel=1
 pkgdesc="Initramfs rescue shell toolbox: PID 1 init flow + BusyBox-style rescue applets (prebuilt static nolibc binary)"
@@ -9,8 +9,8 @@ url="https://github.com/Fgaoxing/Aether"
 license=('MIT')
 depends=()
 provides=('aether')
-conflicts=('aether-git')
-install=aether-bin.install
+conflicts=('aether-rescue-git')
+install=aether-rescue-bin.install
 source=("$url/releases/download/v${pkgver}/aether-${CARCH}-nolibc"
         "$url/archive/refs/tags/v${pkgver}.tar.gz"
         "LICENSE::$url/raw/v${pkgver}/LICENSE")

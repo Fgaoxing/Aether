@@ -231,8 +231,8 @@ sudo ./tools/register-aether-efi.sh --list / --uninstall / --dry-run
 
 | 包 | 构建方式 |
 | --- | --- |
-| `aether-git` | 从 git HEAD 构建；静态 nolibc 二进制，无运行时依赖 |
-| `aether-bin` | 预编译静态 nolibc 二进制 + 来自 GitHub Release 的 hook |
+| `aether-rescue-git` | 从 git HEAD 构建；静态 nolibc 二进制，无运行时依赖 |
+| `aether-rescue-bin` | 预编译静态 nolibc 二进制 + 来自 GitHub Release 的 hook |
 
 两个包都安装 `/usr/bin/aether`，并把 mkinitcpio install hook 安装到 `/usr/lib/initcpio/install/`,
 互斥（都 `provide=('aether')`）。
@@ -284,7 +284,7 @@ dm-crypt/LVM swap 场景的 resume；物理 VT 上 USB HID 的 DELETE 键。
 ```
 CMakeLists.txt          双分支构建（host libc / nolibc）+ 架构归一化
 .github/workflows/      CI（push/PR/tag 构建，tag 时发布产物）
-packaging/aur/          AUR 模板（aether-git、aether-bin）
+packaging/aur/          AUR 模板（aether-rescue-git、aether-rescue-bin）+ CI 自动发布
 src/
   main.c                入口点；PID 1 → aether_init_main()
   boot.c/h              init：cmdline 解析 / root 解析 / 启动流程 / 救援命令
@@ -333,9 +333,13 @@ python3 tools/pty_test.py ./build-nolibc/aether                           # 交�
   休眠恢复零 cmdline（自动探测、端到端验证）、全英文输出、GitHub Actions CI(x86_64/i386/aarch64/riscv64)+ AUR 模板
 - v0.1 —— 核心 shell + init 流程
 - v0.2 —— 完整救援工具链 + PID 1 + EFI cmdline 编辑
+- v0.2.5 (2026-11-19) ——
+  - AUR 包改名为 `aether-rescue-git` / `aether-rescue-bin`（旧名在 AUR 不可用）
+  - CI 在 tag push 时自动发布 AUR（archlinux:base-devel 容器；见 packaging/aur/README.md)
+  - CI 的 release job：构建产物，tag 时创建 GitHub Release
 - v0.2.4 (2026-11-17) ——
   - GitHub Actions CI:x86_64 libc+测试、nolibc;i386/aarch64/riscv64 交叉构建；tag 时发布产物
-  - AUR 模板（`aether-git`、`aether-bin`),`packaging/aur/`
+  - AUR 模板（`aether-rescue-git`、`aether-rescue-bin`),`packaging/aur/`
 - v0.2.3 (2026-11-17) ——
   - **休眠恢复自动检测并入 `aether` 核心 hook**（不再需要单独 hook）
   - `aether-resume` 弃用为 no-op（兼容保留）

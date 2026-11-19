@@ -238,8 +238,8 @@ sudo ./tools/register-aether-efi.sh --list / --uninstall / --dry-run
 
 | package | how it builds |
 | --- | --- |
-| `aether-git` | builds from git HEAD; static nolibc binary, no runtime deps |
-| `aether-bin` | prebuilt static nolibc binary + hooks from a GitHub Release |
+| `aether-rescue-git` | builds from git HEAD; static nolibc binary, no runtime deps |
+| `aether-rescue-bin` | prebuilt static nolibc binary + hooks from a GitHub Release |
 
 Both install `/usr/bin/aether` and the mkinitcpio install hooks into `/usr/lib/initcpio/install/`,
 and conflict with each other (both `provide=('aether')`).
@@ -292,7 +292,7 @@ root-tested on real hardware — verify in a sacrificial VM first.
 ```
 CMakeLists.txt          dual-branch build (host libc / nolibc) + arch normalization
 .github/workflows/      CI (build on push/PR/tag, release artifacts on tags)
-packaging/aur/          AUR templates (aether-git, aether-bin)
+packaging/aur/          AUR templates (aether-rescue-git, aether-rescue-bin) + CI auto-publish
 src/
   main.c                entry point; PID 1 → aether_init_main()
   boot.c/h              init: cmdline parse / root resolve / boot flow / rescue commands
@@ -342,9 +342,13 @@ Design principles:
   GitHub Actions CI (x86_64/i386/aarch64/riscv64) + AUR templates
 - v0.1 — core shell + init flow
 - v0.2 — full rescue toolchain + PID 1 + EFI cmdline editing
+- v0.2.5 (2026-11-19) —
+  - AUR packaging renamed to `aether-rescue-git` / `aether-rescue-bin` (old names unavailable on AUR)
+  - CI auto-publish to AUR on tag push (archlinux:base-devel container; see packaging/aur/README.md)
+  - release job in CI: build artifacts, create GitHub Release on tags
 - v0.2.4 (2026-11-17) —
   - GitHub Actions CI: x86_64 libc+tests, nolibc, i386/aarch64/riscv64 cross-builds, release artifacts on tags
-  - AUR templates (`aether-git`, `aether-bin`) under `packaging/aur/`
+  - AUR templates (`aether-rescue-git`, `aether-rescue-bin`) under `packaging/aur/`
 - v0.2.3 (2026-11-17) —
   - **hibernation resume auto-detection now built into the `aether` core hook** (no separate hook needed);
     `aether-resume` deprecated to a no-op for compatibility
