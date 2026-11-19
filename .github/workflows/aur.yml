@@ -72,23 +72,34 @@ jobs:
           echo "git pkgver:  $pkgver_git"
           echo "bin vtag:    $vtag"
 
+      - name: Create builder user (makepkg refuses root)
+        run: |
+          useradd -m -s /bin/bash builder
+          chown -R builder:builder /__w/Aether/Aether
+
       - name: Verify and publish aether-rescue-git
         run: |
           set -e
-          cd packaging/aur/aether-rescue-git
-          sed -i "s/^pkgver=.*/pkgver=$PKGVER_GIT/" PKGBUILD
-          makepkg --printsrcinfo > .SRCINFO
-          makepkg -s --noconfirm
-          rm -f *.pkg.tar.zst *-debug.pkg.tar.zst
+          su -s /bin/bash builder -c '
+            set -e
+            cd /__w/Aether/Aether/packaging/aur/aether-rescue-git
+            sed -i "s/^pkgver=.*/pkgver='"$PKGVER_GIT"'/" PKGBUILD
+            makepkg --printsrcinfo > .SRCINFO
+            makepkg -s --noconfirm
+            rm -f *.pkg.tar.zst *-debug.pkg.tar.zst
+          '
 
       - name: Verify and publish aether-rescue-bin
         run: |
           set -e
-          cd packaging/aur/aether-rescue-bin
-          sed -i "s/^pkgver=.*/pkgver=$VTAG/" PKGBUILD
-          makepkg --printsrcinfo > .SRCINFO
-          makepkg -s --noconfirm
-          rm -f *.pkg.tar.zst *-debug.pkg.tar.zst
+          su -s /bin/bash builder -c '
+            set -e
+            cd /__w/Aether/Aether/packaging/aur/aether-rescue-bin
+            sed -i "s/^pkgver=.*/pkgver='"$VTAG"'/" PKGBUILD
+            makepkg --printsrcinfo > .SRCINFO
+            makepkg -s --noconfirm
+            rm -f *.pkg.tar.zst *-debug.pkg.tar.zst
+          '
 
       - name: Push aether-rescue-git
         run: PKGVER="$PKGVER_GIT" python3 packaging/aur/aur_tool.py push aether-rescue-git
