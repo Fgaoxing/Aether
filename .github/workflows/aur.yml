@@ -44,7 +44,13 @@ jobs:
 
       - name: Compute versions
         run: |
-          vtag="${GITHUB_REF_NAME#v}"
+          vtag=""
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then
+            vtag="${GITHUB_REF_NAME#v}"
+          else
+            vtag="$(git describe --tags --abbrev=0 --match 'v*' 2>/dev/null | sed 's/^v//')"
+          fi
+          [ -n "$vtag" ] || { echo "no v* tag found"; exit 1; }
           echo "VTAG=$vtag" >> "$GITHUB_ENV"
           git fetch --tags --force
           desc=$(git describe --tags --long --match 'v*' 2>/dev/null || true)
