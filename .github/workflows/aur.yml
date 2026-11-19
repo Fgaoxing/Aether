@@ -20,13 +20,16 @@ jobs:
     container:
       image: archlinux:base-devel
     steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
       - name: Install build deps
         run: |
           pacman -Syu --noconfirm git cmake python zstd
+
+      - name: Clone repo (need git history for `git describe`)
+        run: |
+          git config --global --add safe.directory '*'
+          rm -rf /__w/Aether/Aether/* /__w/Aether/Aether/.??*
+          git clone --tags https://github.com/Fgaoxing/Aether.git /__w/Aether/Aether
+          cd /__w/Aether/Aether && git describe --tags --long --match 'v*'
 
       - name: Setup SSH for AUR
         env:
