@@ -37,4 +37,29 @@ long long __moddi3(long long n, long long d)
     return neg ? -(long long)r : (long long)r;
 }
 
+/* GCC 在同一表达式里既要商又要余数时，会调用 __udivmoddi4 / __divmoddi4（融合版）。
+ * 语义：返回商；*rem 返回余数。 */
+unsigned long long __udivmoddi4(unsigned long long n, unsigned long long d,
+                                unsigned long long *rem)
+{
+    unsigned long long q = __udivdi3(n, d);
+    *rem = n - q * d;
+    return q;
+}
+
+long long __divmoddi4(long long n, long long d, long long *rem)
+{
+    long long r;
+    int neg_n = 0, neg_d = 0;
+    unsigned long long un = (unsigned long long)n, ud = (unsigned long long)d;
+    unsigned long long qr;
+
+    if (n < 0) { un = (unsigned long long)(-n); neg_n = 1; }
+    if (d < 0) { ud = (unsigned long long)(-d); neg_d = 1; }
+    qr = __udivmoddi4(un, ud, (unsigned long long *)&r);
+
+    *rem = neg_n ? -r : r;
+    if (neg_n ^ neg_d) return -(long long)qr;
+    return (long long)qr;
+}
 #endif /* !__LP64__ */

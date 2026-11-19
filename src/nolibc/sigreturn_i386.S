@@ -1,3 +1,4 @@
+    .code32
 /* sigreturn trampoline — i386。i386 内核不为信号返回注入代码，
  * handler 返回后跳到这里，走 int 0x80 + __NR_rt_sigreturn(173) 回内核恢复现场。 */
     .text

@@ -36,11 +36,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install deps
-        run: sudo apt-get update && sudo apt-get install -y cmake clang binutils
-      - name: nolibc i386 cross build (clang --target=i386-unknown-linux-gnu)
+        run: sudo apt-get update && sudo apt-get install -y cmake binutils gcc-multilib
+      - name: nolibc i386 cross build (gcc -m32)
         run: |
-          CC=clang cmake -S . -B build-i386 -DUSE_HOST_LIBC=OFF -DAETHER_ARCH=i386 \
-            -DCMAKE_C_FLAGS="--target=i386-unknown-linux-gnu" -DCMAKE_BUILD_TYPE=Release
+          CC=gcc cmake -S . -B build-i386 -DUSE_HOST_LIBC=OFF -DAETHER_ARCH=i386 \
+            -DCMAKE_C_FLAGS="-m32 -fomit-frame-pointer" -DCMAKE_ASM_FLAGS="-m32" -DCMAKE_BUILD_TYPE=Release
           cmake --build build-i386 -j"$(nproc)"
           file build-i386/aether
       - uses: actions/upload-artifact@v4

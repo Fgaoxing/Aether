@@ -1,3 +1,4 @@
+    .code32
 /* _start — i386 Linux。内核入口：esp 指向 argc，随后 argv、NULL、envp。 */
     .text
     .globl _start
