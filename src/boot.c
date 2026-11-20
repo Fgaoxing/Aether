@@ -1263,11 +1263,11 @@ static void del_child_stop_handler(int sig) { (void)sig; g_del_child_stop = 1; }
 /* 扫描并打开当前存在的 evdev 节点 /dev/input/eventN（N=0..31）。
  * 已打开的（opened_mask bit i）跳过。返回新打开的 evdev fd 数。 */
 #define AETHER_EV_SCAN_MAX 32
-static int aether_evscan(int evfds[], int *nev, unsigned *opened_mask)
+static int aether_evscan(int evfds[], size_t capacity, int *nev, unsigned *opened_mask)
 {
     static const char prefix[] = "/dev/input/event";
     int added = 0;
-    for (int idx = 0; idx < AETHER_EV_SCAN_MAX; idx++) {
+    for (int idx = 0; idx < AETHER_EV_SCAN_MAX && (size_t)*nev < capacity; idx++) {
         if (*opened_mask & (1u << idx)) continue;
         char path[32];
         int p = 0;
@@ -1281,14 +1281,10 @@ static int aether_evscan(int evfds[], int *nev, unsigned *opened_mask)
         path[p] = '\0';
         long fd = sys_open(path, O_RDONLY | O_NONBLOCK, 0);
         if (AETHER_IS_ERR(fd)) continue;
-        if (*nev < (int)(sizeof(evfds) / sizeof(evfds[0]))) {
-            evfds[*nev] = (int)fd;
-            (*nev)++;
-            *opened_mask |= (1u << idx);
-            added++;
-        } else {
-            sys_close((int)fd);
-        }
+        evfds[*nev] = (int)fd;
+        (*nev)++;
+        *opened_mask |= (1u << idx);
+        added++;
     }
     return added;
 }
@@ -1305,11 +1301,12 @@ static int aether_del_watcher_child(void)
      * 注意：USB HID 键盘可能比 PID 1 晚枚举出来——所以 evdev fd 不只在启动时打开一次，
      * 而是整个窗口内周期性重扫 event0..31，发现新节点就加入监听。 */
     int evfds[64];
+    const size_t ev_capacity = sizeof(evfds) / sizeof(evfds[0]);
     int nev = 0;
     unsigned opened_mask = 0; /* bit i = /dev/input/eventN 已打开 */
-    for (int idx = 0; idx < 64; idx++) evfds[idx] = -1;
+    for (size_t idx = 0; idx < ev_capacity; idx++) evfds[idx] = -1;
 
-    aether_evscan(evfds, &nev, &opened_mask);
+    aether_evscan(evfds, ev_capacity, &nev, &opened_mask);
 
     /* 通道 B：console 输入侧 raw（OPOST 保留） */
     int fd = aether_tty_open_rw();
@@ -1334,7 +1331,10 @@ static int aether_del_watcher_child(void)
     unsigned char buf[64];
     int scan_ms = 0;              /* 距上次 evdev 重扫的毫秒数；满 100ms 再扫 */
     while (!found && !g_del_child_stop) {
-        if (scan_ms >= 100) { aether_evscan(evfds, &nev, &opened_mask); scan_ms = 0; }
+        if (scan_ms >= 100) {
+            aether_evscan(evfds, ev_capacity, &nev, &opened_mask);
+            scan_ms = 0;
+        }
         if (have_tty) {
             long n = sys_read(fd, buf, sizeof(buf));
             if (n > 0) {
