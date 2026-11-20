@@ -692,6 +692,7 @@ int tool_udhcpc(int argc, char **argv, char **envp)
 {
     (void)envp;
     const char *iface = 0;
+    char names[NET_MAX_IFACES][16];
     int retries = 4, timeout = 2;
     for (int i = 1; i < argc; i++) {
         const char *a = argv[i];
@@ -704,7 +705,6 @@ int tool_udhcpc(int argc, char **argv, char **envp)
     }
     if (!iface) {
         /* 默认：第一个非 lo 接口 */
-        char names[NET_MAX_IFACES][16];
         int n = net_list_ifaces(names, NET_MAX_IFACES);
         for (int i = 0; i < n; i++)
             if (!aether_streq(names[i], "lo")) { iface = names[i]; break; }
