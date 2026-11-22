@@ -161,6 +161,10 @@ else()
     # x86_64/i386/arm 需要信号返回 trampoline（aether_sig_restorer）；aarch64/riscv64/loongarch64 由内核提供
     if(AETHER_ARCH STREQUAL "x86_64" OR AETHER_ARCH STREQUAL "i386" OR AETHER_ARCH STREQUAL "arm")
         target_sources(aether PRIVATE src/nolibc/sigreturn_${AETHER_ARCH}.S)
+    endif
+    # ARM EABI 32-bit nolibc：编译器发出 __aeabi_*divmod 调用
+    if(AETHER_ARCH STREQUAL "arm")
+        target_sources(aether_core PRIVATE src/nolibc/aeabi_div_arm.S)
     endif()
     target_compile_options(aether PRIVATE ${AETHER_COMMON_FLAGS}
         -ffreestanding -fno-builtin -fno-pie -fno-pic)
