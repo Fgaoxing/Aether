@@ -22,7 +22,7 @@ jobs:
     steps:
       - name: Install build deps
         run: |
-          pacman -Syu --noconfirm git cmake python zstd openssh
+          pacman -Syu --noconfirm git cmake python zstd openssh curl
 
       - name: Clone repo (need git history for `git describe`)
         run: |
@@ -92,14 +92,35 @@ jobs:
             rm -f *.pkg.tar.zst *-debug.pkg.tar.zst
           '
 
-      - name: Verify and publish aether-rescue-bin
+      - name: Wait for GitHub release assets (aether-rescue-bin)
+        run: |
+          set -e
+          url="https://github.com/Fgaoxing/Aether/releases/download/v${VTAG}/aether-x86_64-nolibc"
+          echo "waiting for $url"
+          for i in $(seq 1 60); do
+            code=$(curl -sS -L -o /dev/null -w '%{http_code}' "$url" || true)
+            if [ "$code" = "200" ]; then
+              echo "release asset ready"
+              exit 0
+            fi
+            echo "attempt $i/60: HTTP $code, waiting 30s..."
+            sleep 30
+          done
+          echo "release asset not available in time" >&2
+          exit 1
+
+      - name: Update aether-rescue-bin hashes from release
+        run: |
+          set -e
+          python3 packaging/aur/aur_tool.py prepare-bin "$VTAG"
+          chown -R builder:builder /__w/Aether/Aether/packaging/aur/aether-rescue-bin
+
+      - name: Verify aether-rescue-bin
         run: |
           set -e
           su -s /bin/bash builder -c '
             set -e
             cd /__w/Aether/Aether/packaging/aur/aether-rescue-bin
-            sed -i "s/^pkgver=.*/pkgver='"$VTAG"'/" PKGBUILD
-            makepkg --printsrcinfo > .SRCINFO
             makepkg -s --noconfirm
             rm -f *.pkg.tar.zst *-debug.pkg.tar.zst
           '
