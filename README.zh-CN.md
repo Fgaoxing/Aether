@@ -15,7 +15,7 @@
 - **救援网络**：自动 DHCP + telnetd（`0.0.0.0:23`，无认证明文，仅限可信网络），也可手动 `netup`/`ifconfig`/`udhcpc`。
 - **休眠恢复**：构建镜像时从 `/etc/fstab` 自动检测 swap；无需 cmdline `resume=`。
 
-> **状态**：x86_64 已在 QEMU 端到端验证（启动、救援、DELETE 进入救援、DHCP/telnetd、休眠恢复）。i386 已验证。aarch64/riscv64/loongarch64 仅构建。见 [验证状态](#验证状态)。
+> **状态**：x86_64 已在 QEMU 端到端验证（启动、救援、DELETE 进入救援、DHCP/telnetd、休眠恢复）。i386 已验证。arm/aarch64/riscv64/loongarch64 仅构建。见 [验证状态](#验证状态)。
 
 ## 快速开始
 
@@ -119,7 +119,7 @@ PID 1 还会填充 `/dev/disk/by-uuid/<uuid>` 链接（ext4/vfat/btrfs/swap 签�
 
 ## CI / 打包
 
-GitHub Actions（`.github/workflows/build.yml`）在 push/PR/tag 时构建：x86_64 host+tests+nolibc，i386/aarch64/riscv64/loongarch64 nolibc 交叉构建，`v*` tag 发布产物。
+GitHub Actions（`.github/workflows/build.yml`）在 push/PR/tag 时构建：x86_64 host+tests+nolibc，i386/arm/aarch64/riscv64/loongarch64 nolibc 交叉构建，`v*` tag 发布产物。
 
 AUR 模板在 `packaging/aur/`：`aether-rescue-git` 和 `aether-rescue-bin`。
 
@@ -134,7 +134,7 @@ AUR 模板在 `packaging/aur/`：`aether-rescue-git` 和 `aether-rescue-bin`。
 - resume 支持 `resume=/dev`、`PARTUUID=`、`PARTLABEL=`、`UUID=`（含休眠态 `S1SUSPEND`）和 major:minor；不支持 `LABEL=`，不自动激活 dm-crypt/LVM。
 - EFI/NVRAM 写入请先在牺牲用 VM 验证。
 - `lsblk` 不展开 btrfs 子卷。
-- aarch64/riscv64/loongarch64 运行时未测试。
+- arm/aarch64/riscv64/loongarch64 运行时未测试。
 
 ## 验证状态
 
@@ -149,7 +149,7 @@ AUR 模板在 `packaging/aur/`：`aether-rescue-git` 和 `aether-rescue-bin`。
 - 无 udev 填充 `/dev/disk/by-uuid`。
 - `zcat` 与官方 zstd/gzip 字节级一致；`grep` 与 GNU grep 对比 31 个模式。
 
-未验证：aarch64/riscv64/loongarch64 运行时；真机休眠往返；真机 EFI/NVRAM 写入；dm-crypt/LVM resume；物理 VT USB HID DELETE。
+未验证：arm/aarch64/riscv64/loongarch64 运行时；真机休眠往返；真机 EFI/NVRAM 写入；dm-crypt/LVM resume；物理 VT USB HID DELETE。
 
 ## 仓库结构
 

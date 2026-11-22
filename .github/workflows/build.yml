@@ -48,6 +48,23 @@ jobs:
           name: aether-i386-nolibc
           path: build-i386/aether
 
+  arm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install deps
+        run: sudo apt-get update && sudo apt-get install -y cmake gcc-arm-linux-gnueabihf binutils-arm-linux-gnueabihf
+      - name: nolibc arm cross build
+        run: |
+          CC=arm-linux-gnueabihf-gcc cmake -S . -B build-arm -DUSE_HOST_LIBC=OFF \
+            -DAETHER_ARCH=arm -DCMAKE_BUILD_TYPE=Release
+          cmake --build build-arm -j"$(nproc)"
+          file build-arm/aether
+      - uses: actions/upload-artifact@v4
+        with:
+          name: aether-arm-nolibc
+          path: build-arm/aether
+
   aarch64:
     runs-on: ubuntu-latest
     steps:
@@ -101,7 +118,7 @@ jobs:
 
   release:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [x86_64, i386, aarch64, riscv64, loongarch64]
+    needs: [x86_64, i386, arm, aarch64, riscv64, loongarch64]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -115,6 +132,7 @@ jobs:
           cd dist
           mv aether-x86_64-nolibc/aether tmp-x86_64 && rmdir aether-x86_64-nolibc && mv tmp-x86_64 aether-x86_64-nolibc
           mv aether-i386-nolibc/aether tmp-i386 && rmdir aether-i386-nolibc && mv tmp-i386 aether-i386-nolibc
+          mv aether-arm-nolibc/aether tmp-arm && rmdir aether-arm-nolibc && mv tmp-arm aether-arm-nolibc
           mv aether-aarch64-nolibc/aether tmp-aarch64 && rmdir aether-aarch64-nolibc && mv tmp-aarch64 aether-aarch64-nolibc
           mv aether-riscv64-nolibc/aether tmp-riscv64 && rmdir aether-riscv64-nolibc && mv tmp-riscv64 aether-riscv64-nolibc
           mv aether-loongarch64-nolibc/aether tmp-loongarch64 && rmdir aether-loongarch64-nolibc && mv tmp-loongarch64 aether-loongarch64-nolibc

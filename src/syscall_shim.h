@@ -43,8 +43,10 @@
     #include "sysnum/syscall_riscv64.h"
   #elif defined(__loongarch__) && (__loongarch_grlen == 64)
     #include "sysnum/syscall_loongarch64.h"
+  #elif defined(__arm__)
+    #include "sysnum/syscall_arm.h"
   #else
-    #error "nolibc branch supports only x86_64 / aarch64 / i386 / riscv64 / loongarch64; other arches require USE_HOST_LIBC=ON"
+    #error "nolibc branch supports only x86_64 / aarch64 / i386 / arm / riscv64 / loongarch64; other arches require USE_HOST_LIBC=ON"
   #endif
   #define AETHER_NR(name) __NR_##name
   #if defined(__NR_open)
@@ -107,9 +109,9 @@
 #define SIGTERM 15
 #define SIGWINCH 28
 #define SIGTSTP  20
-/* SIGUSR1：x86_64/i386=10，aarch64/riscv64/loongarch64（asm-generic）=16 */
+/* SIGUSR1：x86_64/i386/arm=10，aarch64/riscv64/loongarch64（asm-generic）=16 */
 #ifndef SIGUSR1
-#if defined(__x86_64__) || defined(__i386__)
+#if defined(__x86_64__) || defined(__i386__) || defined(__arm__)
 #define SIGUSR1 10
 #else
 #define SIGUSR1 16
@@ -148,8 +150,8 @@
 /* x86_64: handler(8) flags(8) restorer(8) mask(8) */
 struct aether_sigaction { void *sa_handler; unsigned long sa_flags; void *sa_restorer; unsigned long sa_mask; };
 #define AETHER_SIGSETSIZE 8
-#elif defined(__i386__)
-/* i386: handler(4) mask(8, _NSIG_WORDS=2×4B) flags(4) restorer(4)；sigsetsize 必须为 8（内核
+#elif defined(__i386__) || defined(__arm__)
+/* i386/arm: handler(4) mask(8, _NSIG_WORDS=2×4B) flags(4) restorer(4)；sigsetsize 必须为 8（内核
  * 对 _NSIG/8 校验，4 会 EINVAL）。UAPI asm/signal.h 里的 4 字节 mask 已过时，勿信。 */
 struct aether_sigaction { void *sa_handler; unsigned long sa_mask[2]; unsigned int sa_flags; void *sa_restorer; };
 #define AETHER_SIGSETSIZE 8
@@ -158,7 +160,7 @@ struct aether_sigaction { void *sa_handler; unsigned long sa_mask[2]; unsigned i
 struct aether_sigaction { void *sa_handler; unsigned long sa_flags; unsigned long sa_mask; };
 #define AETHER_SIGSETSIZE 8
 #endif
-extern void aether_sig_restorer(void); /* 见 nolibc/sigreturn_*.S（仅 x86_64/i386） */
+extern void aether_sig_restorer(void); /* 见 nolibc/sigreturn_*.S（仅 x86_64/i386/arm） */
 #endif
 
 /* 注册信号 handler；返回 0 成功，-1 失败。nolibc 分支 SA_RESTORER 由 arch 决定 */

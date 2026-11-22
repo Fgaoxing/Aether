@@ -4,6 +4,7 @@
  *   x86_64    : syscall    rax=号 rdi/rsi/rdx/r10/r8/r9=参
  *   aarch64   : svc #0     x8=号  x0~x5=参
  *   i386      : int 0x80   eax=号 ebx/ecx/edx/esi/edi/ebp=参（mmap 走 mmap2，offset 单位为 4K 页）
+ *   arm (EABI): svc #0     r7=号  r0~r5=参（mmap 走 mmap2，offset 单位为 4K 页）
  *   riscv64   : ecall      a7=号  a0~a5=参
  *   loongarch64: syscall 0  a7=号  a0~a5=参
  */
@@ -95,6 +96,19 @@ long aether_syscall6(long nr, long a0, long a1, long a2, long a3, long a4, long 
                      : "r"(la1), "r"(la2), "r"(la3), "r"(la4), "r"(la5), "r"(la7)
                      : "memory");
     return la0;
+#elif defined(__arm__)
+    register long rr7 __asm__("r7") = nr;
+    register long rr0 __asm__("r0") = a0;
+    register long rr1 __asm__("r1") = a1;
+    register long rr2 __asm__("r2") = a2;
+    register long rr3 __asm__("r3") = a3;
+    register long rr4 __asm__("r4") = a4;
+    register long rr5 __asm__("r5") = a5;
+    __asm__ volatile("svc 0"
+                     : "+r"(rr0)
+                     : "r"(rr1), "r"(rr2), "r"(rr3), "r"(rr4), "r"(rr5), "r"(rr7)
+                     : "memory");
+    return rr0;
 #else
     /* syscall_shim.h 已 #error，此分支不可达 */
     (void)nr; (void)a0; (void)a1; (void)a2; (void)a3; (void)a4; (void)a5;
@@ -136,9 +150,8 @@ long sys_lseek(int fd, long offset, int whence)
 
 long sys_mmap(void *addr, size_t length, int prot, int flags, int fd, long offset)
 {
-#if defined(__i386__)
-    /* int 0x80 下 __NR_mmap(90) 走内存传参，无论 libc 还是 nolibc 分支一律改用 mmap2(192)：
-     * offset 以 4K 页为单位 */
+#if defined(__i386__) || defined(__arm__)
+    /* i386/arm 32-bit：统一走 mmap2，offset 以 4K 页为单位 */
     return syscall_nr(AETHER_NR(mmap2), (long)addr, (long)length, (long)prot,
                       (long)flags, (long)fd, offset >> 12);
 #else
@@ -422,13 +435,13 @@ long aether_signal(int signum, void (*handler)(int))
     /* nolibc 分支：内核 sigaction 布局 + rt_sigaction */
     struct aether_sigaction sa;
     sa.sa_handler = (void *)handler;
-#if defined(__x86_64__) || defined(__i386__)
+#if defined(__x86_64__) || defined(__i386__) || defined(__arm__)
     sa.sa_restorer = (void *)aether_sig_restorer; /* 见 nolibc/sigreturn_*.S */
     sa.sa_flags = AETHER_SA_RESTORER;
 #else
     sa.sa_flags = 0;
 #endif
-#if defined(__i386__)
+#if defined(__i386__) || defined(__arm__)
     sa.sa_mask[0] = 0; sa.sa_mask[1] = 0;
 #else
     sa.sa_mask = 0;
