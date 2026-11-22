@@ -82,9 +82,26 @@ jobs:
           name: aether-riscv64-nolibc
           path: build-riscv64/aether
 
+  loongarch64:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install deps
+        run: sudo apt-get update && sudo apt-get install -y cmake gcc-loongarch64-linux-gnu binutils-loongarch64-linux-gnu
+      - name: nolibc loongarch64 cross build
+        run: |
+          CC=loongarch64-linux-gnu-gcc cmake -S . -B build-loongarch64 -DUSE_HOST_LIBC=OFF \
+            -DAETHER_ARCH=loongarch64 -DCMAKE_BUILD_TYPE=Release
+          cmake --build build-loongarch64 -j"$(nproc)"
+          file build-loongarch64/aether
+      - uses: actions/upload-artifact@v4
+        with:
+          name: aether-loongarch64-nolibc
+          path: build-loongarch64/aether
+
   release:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [x86_64, i386, aarch64, riscv64]
+    needs: [x86_64, i386, aarch64, riscv64, loongarch64]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -100,6 +117,7 @@ jobs:
           mv aether-i386-nolibc/aether tmp-i386 && rmdir aether-i386-nolibc && mv tmp-i386 aether-i386-nolibc
           mv aether-aarch64-nolibc/aether tmp-aarch64 && rmdir aether-aarch64-nolibc && mv tmp-aarch64 aether-aarch64-nolibc
           mv aether-riscv64-nolibc/aether tmp-riscv64 && rmdir aether-riscv64-nolibc && mv tmp-riscv64 aether-riscv64-nolibc
+          mv aether-loongarch64-nolibc/aether tmp-loongarch64 && rmdir aether-loongarch64-nolibc && mv tmp-loongarch64 aether-loongarch64-nolibc
           sha256sum aether-* > SHA256SUMS
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2

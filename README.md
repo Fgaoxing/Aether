@@ -15,7 +15,7 @@
 - **Networking in rescue**: auto DHCP + telnetd on `0.0.0.0:23` (trusted networks only), or manual `netup`/`ifconfig`/`udhcpc`.
 - **Hibernation resume**: auto-detects swap from `/etc/fstab` at image build time; no cmdline `resume=` required.
 
-> **Status**: x86_64 end-to-end verified on QEMU (boot, rescue, DELETE-to-rescue, DHCP/telnetd, hibernation resume). i386 verified. aarch64/riscv64 build only. See [Verification status](#verification-status).
+> **Status**: x86_64 end-to-end verified on QEMU (boot, rescue, DELETE-to-rescue, DHCP/telnetd, hibernation resume). i386 verified. aarch64/riscv64/loongarch64 build only. See [Verification status](#verification-status).
 
 ## Quick Start
 
@@ -119,7 +119,7 @@ Design rules: single user, root-only, no uid/gid name resolution, no setuid/capa
 
 ## CI / Packaging
 
-GitHub Actions (`.github/workflows/build.yml`) builds on push/PR/tags: x86_64 host+tests+nolibc, i386/aarch64/riscv64 nolibc cross builds, and release artifacts on `v*` tags.
+GitHub Actions (`.github/workflows/build.yml`) builds on push/PR/tags: x86_64 host+tests+nolibc, i386/aarch64/riscv64/loongarch64 nolibc cross builds, and release artifacts on `v*` tags.
 
 AUR templates live under `packaging/aur/`: `aether-rescue-git` and `aether-rescue-bin`.
 
@@ -134,7 +134,7 @@ AUR templates live under `packaging/aur/`: `aether-rescue-git` and `aether-rescu
 - Resume supports `resume=/dev`, `PARTUUID=`, `PARTLABEL=`, `UUID=` (including hibernated `S1SUSPEND`), and major:minor; no `LABEL=`, no automatic dm-crypt/LVM activation.
 - EFI/NVRAM writes should be tested in a sacrificial VM first.
 - `lsblk` does not expand btrfs subvolumes.
-- aarch64/riscv64 runtime not tested.
+- aarch64/riscv64/loongarch64 runtime not tested.
 
 ## Verification Status
 
@@ -149,7 +149,7 @@ Verified (x86_64, QEMU/host, as of 2026-11):
 - `/dev/disk/by-uuid` populated without udev.
 - `zcat` byte-exact vs official zstd/gzip; `grep` compared against GNU grep on 31 patterns.
 
-Not verified: aarch64/riscv64 runtime; real-hardware hibernate round-trip; real-hardware EFI/NVRAM writes; dm-crypt/LVM resume; physical VT USB HID DELETE.
+Not verified: aarch64/riscv64/loongarch64 runtime; real-hardware hibernate round-trip; real-hardware EFI/NVRAM writes; dm-crypt/LVM resume; physical VT USB HID DELETE.
 
 ## Repository Layout
 

@@ -1,10 +1,11 @@
 /*
  * syscall_shim.c — 双分支实现（§4.3 / §5）
  * nolibc asm 模板按需求文档 4.1/5.1 的 ABI：
- *   x86_64 : syscall    rax=号 rdi/rsi/rdx/r10/r8/r9=参
- *   aarch64: svc #0     x8=号  x0~x5=参
- *   i386   : int 0x80   eax=号 ebx/ecx/edx/esi/edi/ebp=参（mmap 走 mmap2，offset 单位为 4K 页）
- *   riscv64: ecall      a7=号  a0~a5=参
+ *   x86_64    : syscall    rax=号 rdi/rsi/rdx/r10/r8/r9=参
+ *   aarch64   : svc #0     x8=号  x0~x5=参
+ *   i386      : int 0x80   eax=号 ebx/ecx/edx/esi/edi/ebp=参（mmap 走 mmap2，offset 单位为 4K 页）
+ *   riscv64   : ecall      a7=号  a0~a5=参
+ *   loongarch64: syscall 0  a7=号  a0~a5=参
  */
 #include "syscall_shim.h"
 
@@ -81,6 +82,19 @@ long aether_syscall6(long nr, long a0, long a1, long a2, long a3, long a4, long 
                      : "r"(ra1), "r"(ra2), "r"(ra3), "r"(ra4), "r"(ra5), "r"(ra7)
                      : "memory");
     return ra0;
+#elif defined(__loongarch__) && (__loongarch_grlen == 64)
+    register long la7 __asm__("a7") = nr;
+    register long la0 __asm__("a0") = a0;
+    register long la1 __asm__("a1") = a1;
+    register long la2 __asm__("a2") = a2;
+    register long la3 __asm__("a3") = a3;
+    register long la4 __asm__("a4") = a4;
+    register long la5 __asm__("a5") = a5;
+    __asm__ volatile("syscall 0"
+                     : "+r"(la0)
+                     : "r"(la1), "r"(la2), "r"(la3), "r"(la4), "r"(la5), "r"(la7)
+                     : "memory");
+    return la0;
 #else
     /* syscall_shim.h 已 #error，此分支不可达 */
     (void)nr; (void)a0; (void)a1; (void)a2; (void)a3; (void)a4; (void)a5;
@@ -105,7 +119,7 @@ long sys_open(const char *path, int flags, int mode)
 #if AETHER_OPEN_IS_DIRECT
     return syscall_nr(AETHER_NR(open), (long)path, (long)flags, (long)mode, 0, 0, 0);
 #else
-    /* aarch64 / riscv64 没有 open(2)（asm-generic），统一走 openat(AT_FDCWD) */
+    /* aarch64 / riscv64 / loongarch64 没有 open(2)（asm-generic），统一走 openat(AT_FDCWD) */
     return syscall_nr(AETHER_NR(openat), AT_FDCWD, (long)path, (long)flags, (long)mode, 0, 0);
 #endif
 }
@@ -177,7 +191,7 @@ long sys_fork(void)
 #elif !defined(USE_LIBC_SYSCALL) && defined(__NR_fork)
     return syscall_nr(__NR_fork, 0, 0, 0, 0, 0, 0);
 #else
-    /* aarch64 / riscv64 没有 fork(2)：clone(SIGCHLD) 语义等同 fork */
+    /* aarch64 / riscv64 / loongarch64 没有 fork(2)：clone(SIGCHLD) 语义等同 fork */
     return syscall_nr(AETHER_NR(clone), SIGCHLD, 0, 0, 0, 0, 0);
 #endif
 }

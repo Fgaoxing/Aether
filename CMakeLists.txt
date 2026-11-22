@@ -3,12 +3,12 @@
 cmake_minimum_required(VERSION 3.13)
 project(aether C ASM)
 
-option(USE_HOST_LIBC "Use host libc syscall wrapper (local build). OFF = official nolibc static package (-nostdlib, only x86_64/aarch64/i386/riscv64)" ON)
+option(USE_HOST_LIBC "Use host libc syscall wrapper (local build). OFF = official nolibc static package (-nostdlib, only x86_64/aarch64/i386/riscv64/loongarch64)" ON)
 option(AETHER_BUILD_TESTS "Build host unit tests (libc build only)" ON)
-set(AETHER_ARCH "" CACHE STRING "Target arch override: x86_64|aarch64|i386|riscv64 (default: CMAKE_SYSTEM_PROCESSOR, normalized)")
+set(AETHER_ARCH "" CACHE STRING "Target arch override: x86_64|aarch64|i386|riscv64|loongarch64 (default: CMAKE_SYSTEM_PROCESSOR, normalized)")
 set(AETHER_VERSION "1.0.1" CACHE STRING "Version string embedded in the binary")
 
-# --- 架构归一（§11）：AMD64/x64→x86_64；aarch64/arm64→aarch64；i386/i486/i586/i686→i386；riscv64/riscv→riscv64 ---
+# --- 架构归一（§11）：AMD64/x64→x86_64；aarch64/arm64→aarch64；i386/i486/i586/i686→i386；riscv64/riscv→riscv64；loongarch64→loongarch64 ---
 string(TOLOWER "${CMAKE_SYSTEM_PROCESSOR}" _proc)
 if(AETHER_ARCH STREQUAL "")
     if(_proc MATCHES "^(x86_64|amd64|x64)$")
@@ -19,19 +19,21 @@ if(AETHER_ARCH STREQUAL "")
         set(AETHER_ARCH i386)
     elseif(_proc MATCHES "^(riscv64|riscv)$")
         set(AETHER_ARCH riscv64)
+    elseif(_proc MATCHES "^(loongarch64|loong64)$")
+        set(AETHER_ARCH loongarch64)
     else()
         set(AETHER_ARCH unknown)
     endif()
 endif()
 
-set(AETHER_VALID_ARCHES "x86_64;aarch64;i386;riscv64")
+set(AETHER_VALID_ARCHES "x86_64;aarch64;i386;riscv64;loongarch64")
 if(NOT AETHER_ARCH IN_LIST AETHER_VALID_ARCHES)
     if(USE_HOST_LIBC)
         message(WARNING "aether: 未识别的架构 '${CMAKE_SYSTEM_PROCESSOR}'，按 host 原生 libc 构建（结果可能不符预期）")
     else()
         message(FATAL_ERROR
             "aether: nolibc 官方包不支持架构 '${CMAKE_SYSTEM_PROCESSOR}'（归一化结果：'${AETHER_ARCH}'）。\n"
-            "nolibc 仅支持 x86_64 / aarch64 / i386 / riscv64；其他架构请用 -DUSE_HOST_LIBC=ON。\n"
+            "nolibc 仅支持 x86_64 / aarch64 / i386 / riscv64 / loongarch64；其他架构请用 -DUSE_HOST_LIBC=ON。\n"
             "riscv32 / rv32* 亦不支持。")
     endif()
 endif()
@@ -71,11 +73,13 @@ else()
         set(_tuple_ok TRUE)
     elseif(AETHER_ARCH STREQUAL "riscv64" AND _tuple MATCHES "riscv64")
         set(_tuple_ok TRUE)
+    elseif(AETHER_ARCH STREQUAL "loongarch64" AND _tuple MATCHES "loongarch64")
+        set(_tuple_ok TRUE)
     endif()
     if(NOT _tuple_ok)
         message(FATAL_ERROR
             "aether: 编译器目标（${AETHER_COMPILER_TUPLE}）与 -DAETHER_ARCH=${AETHER_ARCH} 不一致。\n"
-            "交叉构建请显式传 -DAETHER_ARCH=<x86_64|aarch64|i386|riscv64>，或用 toolchain 文件。")
+            "交叉构建请显式传 -DAETHER_ARCH=<x86_64|aarch64|i386|riscv64|loongarch64>，或用 toolchain 文件。")
     endif()
 endif()
 
@@ -150,7 +154,7 @@ if(USE_HOST_LIBC)
     endif()
 else()
     target_sources(aether PRIVATE src/nolibc/start_${AETHER_ARCH}.S)
-    # x86_64/i386 需要信号返回 trampoline（aether_sig_restorer）；aarch64/riscv64 由内核提供
+    # x86_64/i386 需要信号返回 trampoline（aether_sig_restorer）；aarch64/riscv64/loongarch64 由内核提供
     if(AETHER_ARCH STREQUAL "x86_64" OR AETHER_ARCH STREQUAL "i386")
         target_sources(aether PRIVATE src/nolibc/sigreturn_${AETHER_ARCH}.S)
     endif()

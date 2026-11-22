@@ -41,8 +41,10 @@
     #include "sysnum/syscall_i386.h"
   #elif defined(__riscv) && (__riscv_xlen == 64)
     #include "sysnum/syscall_riscv64.h"
+  #elif defined(__loongarch__) && (__loongarch_grlen == 64)
+    #include "sysnum/syscall_loongarch64.h"
   #else
-    #error "nolibc branch supports only x86_64 / aarch64 / i386 / riscv64; other arches require USE_HOST_LIBC=ON"
+    #error "nolibc branch supports only x86_64 / aarch64 / i386 / riscv64 / loongarch64; other arches require USE_HOST_LIBC=ON"
   #endif
   #define AETHER_NR(name) __NR_##name
   #if defined(__NR_open)
@@ -105,7 +107,7 @@
 #define SIGTERM 15
 #define SIGWINCH 28
 #define SIGTSTP  20
-/* SIGUSR1：x86_64/i386=10，aarch64/riscv64（asm-generic）=16 */
+/* SIGUSR1：x86_64/i386=10，aarch64/riscv64/loongarch64（asm-generic）=16 */
 #ifndef SIGUSR1
 #if defined(__x86_64__) || defined(__i386__)
 #define SIGUSR1 10
@@ -152,7 +154,7 @@ struct aether_sigaction { void *sa_handler; unsigned long sa_flags; void *sa_res
 struct aether_sigaction { void *sa_handler; unsigned long sa_mask[2]; unsigned int sa_flags; void *sa_restorer; };
 #define AETHER_SIGSETSIZE 8
 #else
-/* aarch64 / riscv64 (asm-generic): handler(8) flags(8) mask(8，紧邻，无 restorer 字段) */
+/* aarch64 / riscv64 / loongarch64 (asm-generic): handler(8) flags(8) mask(8，紧邻，无 restorer 字段) */
 struct aether_sigaction { void *sa_handler; unsigned long sa_flags; unsigned long sa_mask; };
 #define AETHER_SIGSETSIZE 8
 #endif
