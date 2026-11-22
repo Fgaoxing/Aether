@@ -1,7 +1,7 @@
 # Maintainer: Fgaoxing <Fgaoxing0206@163.com>
 # AUR: prebuilt nolibc static binary from GitHub Releases (no build tool needed).
 pkgname=aether-rescue-bin
-pkgver=1.0.1
+pkgver=1.0.2
 pkgrel=1
 pkgdesc="Initramfs rescue shell toolbox: PID 1 init flow + BusyBox-style rescue applets (prebuilt static nolibc binary)"
 arch=('x86_64')
