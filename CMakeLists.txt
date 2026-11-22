@@ -6,7 +6,7 @@ project(aether C ASM)
 option(USE_HOST_LIBC "Use host libc syscall wrapper (local build). OFF = official nolibc static package (-nostdlib, only x86_64/aarch64/i386/riscv64)" ON)
 option(AETHER_BUILD_TESTS "Build host unit tests (libc build only)" ON)
 set(AETHER_ARCH "" CACHE STRING "Target arch override: x86_64|aarch64|i386|riscv64 (default: CMAKE_SYSTEM_PROCESSOR, normalized)")
-set(AETHER_VERSION "1.0.0" CACHE STRING "Version string embedded in the binary")
+set(AETHER_VERSION "1.0.1" CACHE STRING "Version string embedded in the binary")
 
 # --- 架构归一（§11）：AMD64/x64→x86_64；aarch64/arm64→aarch64；i386/i486/i586/i686→i386；riscv64/riscv→riscv64 ---
 string(TOLOWER "${CMAKE_SYSTEM_PROCESSOR}" _proc)
@@ -81,7 +81,7 @@ endif()
 
 # --- 编译选项：-Os 静态链接取向（§3）；nolibc 加 -nostdlib -ffreestanding ---
 # gnu11：Linux 下需要 _DEFAULT_SOURCE 等特性宏（如 syscall(3) 声明）；方言差异对本项目无影响
-set(AETHER_COMMON_FLAGS -Os -Wall -Wextra -std=gnu11 -fno-stack-protector)
+set(AETHER_COMMON_FLAGS -Os -Wall -Wextra -std=gnu11 -fno-stack-protector -fno-ident)
 
 add_library(aether_core STATIC
     src/elog.c
@@ -146,7 +146,7 @@ target_link_libraries(aether PRIVATE aether_core)
 if(USE_HOST_LIBC)
     target_compile_options(aether PRIVATE ${AETHER_COMMON_FLAGS})
     if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-        target_link_options(aether PRIVATE -Wl,--gc-sections)
+        target_link_options(aether PRIVATE -Wl,--gc-sections -Wl,--strip-all -Wl,--build-id=none)
     endif()
 else()
     target_sources(aether PRIVATE src/nolibc/start_${AETHER_ARCH}.S)
@@ -156,9 +156,20 @@ else()
     endif()
     target_compile_options(aether PRIVATE ${AETHER_COMMON_FLAGS}
         -ffreestanding -fno-builtin -fno-pie -fno-pic)
-    # 官方包：--strip-all 去符号（体积优先）；构建可复现、initramfs 友好
+    # 默认去符号/去 build-id（体积优先）；构建可复现、initramfs 友好
     target_link_options(aether PRIVATE -nostdlib -static
-        -Wl,--strip-all -Wl,--gc-sections)
+        -Wl,--strip-all -Wl,--build-id=none -Wl,--gc-sections)
+endif()
+
+# 默认移除编译器标识/注释段
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    find_program(AETHER_STRIP_TOOL NAMES ${CMAKE_STRIP} strip)
+    if(AETHER_STRIP_TOOL)
+        add_custom_command(TARGET aether POST_BUILD
+            COMMAND ${AETHER_STRIP_TOOL} --remove-section=.comment $<TARGET_FILE:aether>
+            COMMENT "Removing .comment from aether"
+            VERBATIM)
+    endif()
 endif()
 
 # --- 单元测试（仅 host/libc 构建）---

@@ -2,22 +2,15 @@
 # SPDX-License-Identifier: GPL-2.0-only
 # aether 救援镜像 — CPU 微码删减 hook
 #
-# 选择：保留
-#   1) "基础微码"：每个 (family, model) 最新（最高 rev）的记录 —— intel-ucode.img
-#      222 条 → 18 条，14.6 MB → ≈4.2 MiB；所有 i5/i7、Atom、Xeon 世系都有一份
-#      可以加载的最新修正（典型共有基线）；
-#   2) "本机微码"：与本机 CPU family+model 完全匹配的**全部 rev**（含旧 rev，
-#      以保证用户使用较老微码环境也能应报前台）。
+# 默认策略（与 iucode_tool -S / --scan-system 对齐）：
+#   仅保留与本机 CPU 匹配的微码记录/文件；本机无匹配则不添加微码并 warning。
 #
 # 环境变量：
-#   AETHER_MICROCODE_KEEP_ALL=1   不删减，把整包 ucode.img 装进 image（生产用/对比用）
-#   AETHER_MICROCODE_LOCAL_ONLY=1 只留本机 family+model 匹配的微码，不加基础集合
-#   AETHER_MICROCODE_DEBUG=1      打印每条保留/跳过的微码记录
-#   AETHER_MICROCODE_CPUINFO=...  指定模拟 CPU 信息文件（测试用）
-#
-# 剥离策略：
-#   "基础 + 本机"是推荐默认（image ≈4.5 MiB；本机本就是 0 条匹配，故全部来自基础集）。
-#   若坚持最轻量化：AETHER_MICROCODE_LOCAL_ONLY=1（≈330 KiB，本机无匹配=无 early file）。
+#   AETHER_MICROCODE_KEEP_ALL=1    不删减，保留整包微码
+#   AETHER_MICROCODE_BASE_LOCAL=1  base+local：每个 (family,model) 最新 rev + 本机全 rev
+#   AETHER_MICROCODE_LOCAL_ONLY=1  仅本机匹配（默认行为，兼容保留）
+#   AETHER_MICROCODE_DEBUG=1       打印每条保留/跳过的微码记录
+#   AETHER_MICROCODE_CPUINFO=...   指定模拟 CPU 信息文件（测试用）
 #
 # 使用：HOOKS=(aether aether-microcode)
 #         AETHER_MICROCODE_DEBUG=1 mkinitcpio -c /tmp/... -g ... -n
@@ -75,28 +68,101 @@ drops all microcode for other platforms -- image no longer carries microcode irr
 HELPEOF
 }
 
-# ---- 从 /usr/lib/firmware/${vendor}-ucode/ 中挑出精确匹配微码组合，仅新进 early file
+# ---- 从 /usr/lib/firmware/${vendor}-ucode/ 中挑出匹配微码，仅装入 early file
 aether_microcode_from_firmware() {
     local vendor="$1" family="$2" model="$3" stepping="$4"
     local fw_dir="/usr/lib/firmware/${vendor}-ucode"
     local -a candidates=()
 
     if [[ "$vendor" == intel ]]; then
-        local name
-        name="$(printf '%02x-%02x-%02x' "$family" "$model" "$stepping")"
-        mapfile -t candidates < <(LC_ALL=C.UTF-8 find "$fw_dir" -maxdepth 1 -name "${name}" -o -name "${name}.bin" 2>/dev/null)
+        if [[ "${AETHER_MICROCODE_KEEP_ALL:-}" == 1 ]]; then
+            mapfile -t candidates < <(LC_ALL=C.UTF-8 find "$fw_dir" -maxdepth 1 -type f ! -name '.*' | LC_ALL=C.UTF-8 sort)
+        else
+            mapfile -t candidates < <(
+                python3 - "$fw_dir" "$family" "$model" <<'PYSEL'
+import glob, os, struct, sys
+fw_dir = sys.argv[1]
+fam, mod = int(sys.argv[2], 10), int(sys.argv[3], 10)
+debug = os.environ.get('AETHER_MICROCODE_DEBUG', '0') == '1'
+base_local = os.environ.get('AETHER_MICROCODE_BASE_LOCAL', '0') == '1'
+paths = sorted(p for p in glob.glob(os.path.join(fw_dir, '*')) if os.path.isfile(p) and not os.path.basename(p).startswith('.'))
+records = []
+for p in paths:
+    try:
+        with open(p, 'rb') as f:
+            hdr = f.read(48)
+        if len(hdr) < 48:
+            continue
+        hdrver, rev, date, sig = struct.unpack_from('<4I', hdr, 0)
+        if hdrver != 1:
+            continue
+        cf = (sig >> 8) & 0xf
+        if cf == 0xf:
+            cf += (sig >> 20) & 0xff
+        cm = (sig >> 4) & 0xf
+        if cf in (0x6, 0xf):
+            cm |= ((sig >> 16) & 0xf) << 4
+        records.append((p, rev, cf, cm))
+    except OSError:
+        continue
+if base_local:
+    best = {}
+    for p, rev, cf, cm in records:
+        k = (cf, cm)
+        if k not in best or rev > best[k][1]:
+            best[k] = (p, rev, cf, cm)
+    selected = list(best.values())
+    for r in records:
+        if r[2] == fam and r[3] == mod and id(best.get((r[2], r[3]))) != id(r):
+            selected.append(r)
+    seen = set()
+    uniq = []
+    for r in selected:
+        if r[0] not in seen:
+            seen.add(r[0])
+            uniq.append(r)
+    selected = uniq
+    desc = 'base+local'
+else:
+    selected = [(p, rev, cf, cm) for p, rev, cf, cm in records if cf == fam and cm == mod]
+    desc = 'local-only'
+local_matched = any(cf == fam and cm == mod for _, _, cf, cm in records)
+if not local_matched:
+    print(
+        f"warning: no microcode record matches this CPU (family={fam} model={mod:#x}); "
+        f"skipping microcode (CPU may not need an update, intel-ucode/amd-ucode may be missing, or remove aether-microcode hook)",
+        file=sys.stderr,
+    )
+    selected = []
+    desc = 'no-local-match'
+print(f"ucode trim ({desc}): {len(selected)} of {len(records)} files", file=sys.stderr)
+for p, _, _, _ in selected:
+    print(p)
+PYSEL
+            )
+        fi
 
-        if (( ${#candidates[@]} == 0 )) && [[ "${AETHER_MICROCODE_KEEP_ALL:-}" != 1 ]]; then
-            # 任何一个 INTEL 段匹配不到 ⇒整个 Intel 微码在本机都没用，直接不加
-            warning "aether-microcode: CPU (family=$family model=$model stepping=$stepping) has no matching microcode in $fw_dir"
+        if (( ${#candidates[@]} == 0 )); then
+            [[ "${AETHER_MICROCODE_KEEP_ALL:-}" == 1 ]] && warning "aether-microcode: no Intel microcode files found in $fw_dir"
             return 0
         fi
     else
-        local fam_name="$(printf 'fam%xh' "$family")"
-        mapfile -t candidates < <(LC_ALL=C.UTF-8 find "$fw_dir" -maxdepth 1 -name 'microcode_amd*.bin' 2>/dev/null)
-        if (( ${#candidates[@]} == 0 )); then
-            warning "aether-microcode: $fw_dir is empty, skipping"
-            return 0
+        if [[ "${AETHER_MICROCODE_KEEP_ALL:-}" == 1 ]]; then
+            mapfile -t candidates < <(LC_ALL=C.UTF-8 find "$fw_dir" -maxdepth 1 -name 'microcode_amd*.bin' -type f | LC_ALL=C.UTF-8 sort)
+        else
+            local fam_name
+            fam_name="$(printf 'microcode_amd_fam%xh.bin' "$family")"
+            if [[ -f "${fw_dir}/${fam_name}" ]]; then
+                candidates=("${fw_dir}/${fam_name}")
+            elif [[ -f "${fw_dir}/microcode_amd.bin" ]]; then
+                candidates=("${fw_dir}/microcode_amd.bin")
+            else
+                mapfile -t candidates < <(LC_ALL=C.UTF-8 find "$fw_dir" -maxdepth 1 -name 'microcode_amd*.bin' -type f | LC_ALL=C.UTF-8 sort)
+            fi
+            if (( ${#candidates[@]} == 0 )); then
+                warning "aether-microcode: no AMD microcode found in $fw_dir"
+                return 0
+            fi
         fi
     fi
 
@@ -107,7 +173,7 @@ aether_microcode_from_firmware() {
     local size; size="$(stat -c%s "$out" 2>/dev/null || stat -f%z "$out")"
     local dest
     if [[ "$vendor" == intel ]]; then dest='GenuineIntel.bin'; else dest='AuthenticAMD.bin'; fi
-    quiet "adding microcode file(s): '${firmware_dir:-$fw_dir}/${candidates[*]}' ($size bytes)"
+    quiet "adding microcode file(s): ${#candidates[@]} file(s) ($size bytes)"
     add_file_early "$out" "/kernel/x86/microcode/$dest" 644
     rm -f "$out"
     return 0
@@ -139,9 +205,9 @@ try:
 except ValueError:
     fam, mod = int(fam_s, 10), int(mod_s, 10)
 
-debug    = os.environ.get('AETHER_MICROCODE_DEBUG', '0') == '1'
-keep_all = os.environ.get('AETHER_MICROCODE_KEEP_ALL', '0') == '1'
-local_only = os.environ.get('AETHER_MICROCODE_LOCAL_ONLY', '0') == '1'
+debug     = os.environ.get('AETHER_MICROCODE_DEBUG', '0') == '1'
+keep_all   = os.environ.get('AETHER_MICROCODE_KEEP_ALL', '0') == '1'
+base_local = os.environ.get('AETHER_MICROCODE_BASE_LOCAL', '0') == '1'
 
 data = open(inp, 'rb').read()
 
@@ -162,33 +228,44 @@ while pos < len(data):
     if hdrver != 1:
         break
     sz = tsz if (tsz and 2048 <= tsz <= len(data) - pos and tsz % 4 == 0) else 2048
-    f = ((sig >> 8) & 0xf) | ((sig >> 20) & 0xff0)
-    m = ((sig >> 4) & 0xf) | ((sig >> 16) & 0xf0)
+    f = (sig >> 8) & 0xf
+    if f == 0xf:
+        f += (sig >> 20) & 0xff
+    m = (sig >> 4) & 0xf
+    if f in (0x6, 0xf):
+        m |= ((sig >> 16) & 0xf) << 4
     records.append((pos, sz, rev, f, m))
     pos += sz
 
-# 策略
+# 策略（默认与 iucode_tool -S 对齐：仅本机匹配）
 #   keep_all: 全部装
-#   local_only: 仅装本机
-#   默认: 基础集合（每个 (fam, model) 保留最新 rev）+ 本机所有匹配记录
+#   base_local: 每个 (fam, model) 最新 rev + 本机所有匹配记录
+#   默认: 仅本机匹配
 if keep_all:
     selected = set(range(len(records)))
     desc = 'all'
-elif local_only:
-    selected = {i for i, (_, _, _, f, m) in enumerate(records) if f == fam and m == mod}
-    desc = 'local-only'
-else:
-    # base = 每个 (fam, model) 的最新 rev
+elif base_local:
     best = {}
     for i, (_, _, rev, f, m) in enumerate(records):
         k = (f, m)
         if k not in best or rev > best[k][1]:
             best[k] = (i, rev)
-    base = {idx for idx, _ in best.values()}
-    # local = 本机 fam+model 全部档（无论 rev）
     local = {i for i, (_, _, _, f, m) in enumerate(records) if f == fam and m == mod}
-    selected = base | local
+    selected = {idx for idx, _ in best.values()} | local
     desc = 'base+local'
+else:
+    selected = {i for i, (_, _, _, f, m) in enumerate(records) if f == fam and m == mod}
+    desc = 'local-only'
+
+local_matched = any(f == fam and m == mod for _, _, _, f, m in records)
+if not keep_all and not local_matched:
+    print(
+        f"warning: no microcode record matches this CPU (family={fam} model={mod:#x}); "
+        f"skipping microcode (CPU may not need an update, intel-ucode/amd-ucode may be missing, or remove aether-microcode hook)",
+        file=sys.stderr,
+    )
+    selected = set()
+    desc = 'no-local-match'
 
 out = bytearray()
 kb_bytes = 0
@@ -205,8 +282,8 @@ with open(outp, 'wb') as f:
 PY
 
     if [[ ! -s "$tmp_out" ]]; then
-        warning "aether-microcode: machine (family=$family model=$model) has no matching microcode in /boot/$ucode_img"
-        rm -f "$tmp_bin" "$tmp_out"; return 0
+        rm -f "$tmp_bin" "$tmp_out"
+        return 0
     fi
 
     local size; size="$(stat -c%s "$tmp_out" 2>/dev/null || stat -f%z "$tmp_out")"
