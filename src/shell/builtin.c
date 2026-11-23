@@ -14,7 +14,6 @@
 #include "util.h"
 
 #define AT_REMOVEDIR 0x200
-#define MNT_DETACH   0x2
 #define PATH_DEFAULT "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
 /* 简单前缀匹配（不构造额外字符串） */
@@ -526,7 +525,7 @@ static int builtin_mount(int argc, char **argv, char **envp)
 
     if (!target) { elog_err("mount: missing target"); return 2; }
     if (!fstype) { elog_err("mount: missing -t fstype (or use -o bind/remount)"); return 2; }
-    /* 只读根可能无法挂载 efivarfs 等；给出清晰错误 */
+    if (request_ro) flags |= MS_RDONLY;
     {
         long r = sys_mount(source ? source : "none", target, fstype, flags, 0);
         if (AETHER_IS_ERR(r)) {
@@ -648,24 +647,15 @@ static int builtin_syscall(int argc, char **argv, char **envp)
 static int builtin_switch_root(int argc, char **argv, char **envp)
 {
     const char *newroot, *init;
-    (void)envp;
     if (argc < 3) { elog_err("switch_root: usage: switch_root <newroot> <init>"); return 2; }
     newroot = argv[1];
     init    = argv[2];
     if (aether_streq(newroot, "/")) { elog_err("switch_root: refusing to switch_root onto /"); return 2; }
     if (!dir_exists(newroot)) { elog_err("switch_root: %s: not a directory", newroot); return 1; }
 
-    /* init 必须在新根里存在 */
-    {
-        char p[512];
-        size_t d = str_copy(p, sizeof(p), newroot);
-        if (d > 0 && p[d - 1] == '/') p[--d] = '\0';
-        str_cat(p, sizeof(p), "/");
-        str_cat(p, sizeof(p), init[0] == '/' ? init + 1 : init);
-        if (sys_faccessat(AT_FDCWD, p, 0, 0) != 0) {
-            elog_err("switch_root: %s: init not found in new root", p);
-            return 1;
-        }
+    if (!aether_init_is_executable(newroot, init)) {
+        elog_err("switch_root: %s: init not executable in new root", init);
+        return 1;
     }
 
     elog_info("switch_root is irreversible: switching to %s and executing %s, the current rescue environment will be lost.",
@@ -675,31 +665,21 @@ static int builtin_switch_root(int argc, char **argv, char **envp)
         return 1;
     }
 
-    /* 把 /proc /sys /dev 绑进新根（若本身已挂载） */
-    bind_into(newroot, "proc", "proc", 0);
-    bind_into(newroot, "sys",  "sysfs", 0);
-    bind_into(newroot, "dev",  "devtmpfs", "/dev");
+    const char *mode = env_get(envp, "AETHER_INIT");
+    if (mode && aether_streq(mode, "rescue")) return aether_request_switch_root(newroot, init);
 
-    /* 绑定自身为可 pivot 的挂载点 */
+    /* 先创建独立挂载，失败时可以一起撤销后续子挂载。 */
     if (sys_mount(newroot, newroot, 0, MS_BIND | MS_REC, 0) != 0) {
         elog_err("switch_root: bind %s failed", newroot);
         return 1;
     }
-    if (sys_chdir(newroot) != 0) { elog_err("switch_root: chdir %s failed", newroot); return 1; }
-
-    /* 建暂存目录并 pivot_root */
-    sys_mkdirat(AT_FDCWD, ".aether_stash", 0700);
-    {
-        long r = sys_pivot_root(".", ".aether_stash");
-        if (AETHER_IS_ERR(r)) {
-            elog_err("switch_root: pivot_root failed: %d", AETHER_ERR_CODE(r));
-            return 1;
-        }
+    bind_into(newroot, "proc", "proc", 0);
+    bind_into(newroot, "sys",  "sysfs", 0);
+    bind_into(newroot, "dev",  "devtmpfs", "/dev");
+    if (aether_switch_root(newroot) != 0) {
+        sys_umount2(newroot, MNT_DETACH);
+        return 1;
     }
-    /* 现在 old root 在 /.aether_stash；卸掉它 */
-    sys_chdir("/");
-    sys_umount2("/.aether_stash", MNT_DETACH);
-    sys_unlinkat(AT_FDCWD, ".aether_stash", AT_REMOVEDIR);
 
     /* 执行 init */
     {
@@ -776,10 +756,10 @@ static const shell_builtin_t builtins[] = {
     { "mount",       builtin_mount,   0, "mount (-t -o bind/remount/ro/rw...) / list /proc/mounts without args" },
     { "umount",      builtin_umount,  0, "unmount" },
     { "chroot",      builtin_chroot,  0, "chroot into target root (auto-bind /proc /sys /dev, SYSTEMD_OFFLINE=1)" },
-    { "switch_root", builtin_switch_root, 0, "switch to new root (irreversible, needs YES confirmation)" },
+    { "switch_root", builtin_switch_root, 1, "switch to new root (irreversible, needs YES confirmation)" },
     { "syscall",     builtin_syscall, 0, "debug: syscall <nr> [args...] (numbers differ by arch)" },
     { "cmdline",     aether_cmd_cmdline, 0, "show /proc/cmdline" },
-    { "rescue-boot", builtin_rescue_boot, 0, "retry boot (can override cmdline, e.g. root=/dev/x rw)" },
+    { "rescue-boot", builtin_rescue_boot, 1, "retry boot (can override cmdline, e.g. root=/dev/x rw)" },
     { "efi-cmdline", aether_cmd_efi_cmdline, 0, "view/edit EFI boot entry cmdline (edit needs root)" },
     { "jobs",        builtin_jobs,    1, "list stopped/background jobs" },
     { "fg",          builtin_fg,      1, "bring job to foreground: fg [id]" },

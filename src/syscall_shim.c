@@ -134,13 +134,23 @@ long sys_open(const char *path, int flags, int mode)
     return syscall_nr(AETHER_NR(open), (long)path, (long)flags, (long)mode, 0, 0, 0);
 #else
     /* aarch64 / riscv64 / loongarch64 没有 open(2)（asm-generic），统一走 openat(AT_FDCWD) */
-    return syscall_nr(AETHER_NR(openat), AT_FDCWD, (long)path, (long)flags, (long)mode, 0, 0);
+    return sys_openat(AT_FDCWD, path, flags, mode);
 #endif
+}
+
+long sys_openat(int dirfd, const char *path, int flags, int mode)
+{
+    return syscall_nr(AETHER_NR(openat), (long)dirfd, (long)path, (long)flags, (long)mode, 0, 0);
 }
 
 long sys_close(int fd)
 {
     return syscall_nr(AETHER_NR(close), (long)fd, 0, 0, 0, 0, 0);
+}
+
+long sys_fcntl(int fd, int cmd, long arg)
+{
+    return syscall_nr(AETHER_NR(fcntl), (long)fd, (long)cmd, arg, 0, 0, 0);
 }
 
 long sys_lseek(int fd, long offset, int whence)
@@ -339,8 +349,14 @@ long sys_utimensat(int dirfd, const char *path, const void *times, int flags)
 
 long sys_renameat(int olddirfd, const char *old, int newdirfd, const char *new)
 {
+#if (defined(USE_LIBC_SYSCALL) && defined(SYS_renameat)) || \
+    (!defined(USE_LIBC_SYSCALL) && defined(__NR_renameat))
     return syscall_nr(AETHER_NR(renameat), (long)olddirfd, (long)old, (long)newdirfd,
                       (long)new, 0, 0);
+#else
+    return syscall_nr(AETHER_NR(renameat2), (long)olddirfd, (long)old, (long)newdirfd,
+                      (long)new, 0 /* flags */, 0);
+#endif
 }
 
 long sys_ftruncate(int fd, long length)

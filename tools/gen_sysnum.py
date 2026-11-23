@@ -13,7 +13,7 @@ SYMBOLS = ["read","write","open","openat","close","lseek","mmap","mprotect","mun
            "mount","umount2","faccessat","faccessat2","newfstatat","statx",
            "unlinkat","syslog","rt_sigaction","rt_sigreturn","getdents64","mkdirat",
            "nanosleep","socket","bind","recvfrom","mknodat","getpid",
-           "fchmodat","fchownat","readlinkat","symlinkat","setsid","swapon","swapoff","utimensat","renameat",
+           "fchmodat","fchownat","readlinkat","symlinkat","setsid","swapon","swapoff","utimensat","renameat","renameat2",
            "ftruncate","truncate","fsync","sync","flock",
            "setpgid","getpgid","kill","listen","accept4","setsockopt","sendto","reboot","finit_module","init_module"]
 
@@ -55,6 +55,9 @@ SPECS = [
 
 for arch, path, fn, src_name in SPECS:
     table = fn(path)
+    if arch == "riscv64":
+        # asm-generic exposes renameat only under __ARCH_WANT_RENAMEAT.
+        table.pop("renameat", None)
     if arch in ("x86_64", "i386"):
         table = {s: table[s] for s in SYMBOLS if s in table}
     out = []

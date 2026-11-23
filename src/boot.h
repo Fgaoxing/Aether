@@ -31,6 +31,15 @@ int aether_cmdline_file(const char *path, aether_cmdline_t *out);
  * 返回 0 成功，非 0 失败（含提示信息打印到 stderr） */
 int aether_resolve_root(const char *spec, char *out, size_t cap);
 
+/* 在隔离的子进程中、以 root 为根目录检查 init（包括绝对符号链接）。 */
+int aether_init_is_executable(const char *root, const char *init);
+
+/* 将已挂载的路径切成进程根目录。旧内核的 initramfs 回退路径由 PID 1 使用。 */
+int aether_switch_root(const char *newroot);
+
+/* 让 initramfs PID 1 切到手工准备的根目录并执行 init。 */
+int aether_request_switch_root(const char *newroot, const char *init);
+
 /* 完整启动流程；成功不返回（exec 了 init）；失败返回 -1（打印原因） */
 int aether_boot_attempt(const aether_cmdline_t *opts);
 
@@ -43,6 +52,7 @@ int aether_init_main(char **envp);
 /* init 救援 shell 以该退出码退出 = 请求 PID 1 继续启动（exit / rescue-boot）。
  * 普通用法退出码永远从 0 开始且不使用 42 */
 #define AETHER_RESCUE_EXIT_BOOT 42
+#define AETHER_RESCUE_EXIT_SWITCH 43
 
 /* 拯救 shell builtins:cmdline / rescue-boot / efi-cmdline */
 int aether_cmd_cmdline(int argc, char **argv, char **envp);

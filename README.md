@@ -3,19 +3,19 @@
 [![build](https://github.com/Fgaoxing/Aether/actions/workflows/build.yml/badge.svg)](https://github.com/Fgaoxing/Aether/actions/workflows/build.yml)
 [中文](README.zh-CN.md)
 
-**aether** is a BusyBox-style rescue toolbox for Linux initramfs: one static binary, many applets, dispatched by `argv[0]`. It can run as an interactive shell, and its primary role is to act as **PID 1** in an initramfs: mount `/proc`/`/sys`/`/dev`, load modules, parse the kernel cmdline, resolve and mount root, `pivot_root`, then `execve` the real init. Any failure drops into an interactive rescue shell instead of panicking.
+**aether** is a BusyBox-style rescue toolbox for Linux initramfs: one static binary, many applets, dispatched by `argv[0]`. It can run as an interactive shell, and its primary role is to act as **PID 1** in an initramfs: mount `/proc`/`/sys`/`/dev`, load modules, parse the kernel cmdline, resolve and mount root, switch to it, then `execve` the real init. Any failure drops into an interactive rescue shell instead of panicking.
 
 ## Highlights
 
 - **Small & static**: pure C, no C++/ncurses/readline/pthreads; static `-Os` build; nolibc variant has no libc dependency.
 - **Dual build**: host libc for development/tests, nolibc for initramfs deployment.
-- **PID 1 boot flow**: module loading, uevent pumping, root resolution, hibernation resume, `pivot_root`, `execve`.
+- **PID 1 boot flow**: module loading, uevent pumping, root resolution, hibernation resume, root switch, `execve`.
 - **Rescue-first**: every boot failure lands in a usable shell; `exit`/`rescue-boot` retries boot from PID 1.
 - **Deterministic rescue**: add `aether_rescue` to cmdline, or press `DELETE` during boot (background watcher, zero boot-time cost).
 - **Networking in rescue**: auto DHCP + telnetd on `0.0.0.0:23` (trusted networks only), or manual `netup`/`ifconfig`/`udhcpc`.
 - **Hibernation resume**: auto-detects swap from `/etc/fstab` at image build time; no cmdline `resume=` required.
 
-> **Status**: x86_64 end-to-end verified on QEMU (boot, rescue, DELETE-to-rescue, DHCP/telnetd, hibernation resume). i386 verified. arm/aarch64/riscv64/loongarch64 build only. See [Verification status](#verification-status).
+> **Status**: x86_64 end-to-end verified on QEMU (boot, rescue, DELETE-to-rescue, DHCP/telnetd, hibernation resume). i386 verified. riscv64 boots and enters rescue on QEMU with Debian Linux 6.12 and 7.3. See [Verification status](#verification-status).
 
 ## Quick Start
 
@@ -134,7 +134,7 @@ AUR templates live under `packaging/aur/`: `aether-rescue-git` and `aether-rescu
 - Resume supports `resume=/dev`, `PARTUUID=`, `PARTLABEL=`, `UUID=` (including hibernated `S1SUSPEND`), and major:minor; no `LABEL=`, no automatic dm-crypt/LVM activation.
 - EFI/NVRAM writes should be tested in a sacrificial VM first.
 - `lsblk` does not expand btrfs subvolumes.
-- arm/aarch64/riscv64/loongarch64 runtime not tested.
+- arm/aarch64/loongarch64 full-system runtime not tested.
 
 ## Verification Status
 
@@ -149,7 +149,13 @@ Verified (x86_64, QEMU/host, as of 2026-11):
 - `/dev/disk/by-uuid` populated without udev.
 - `zcat` byte-exact vs official zstd/gzip; `grep` compared against GNU grep on 31 patterns.
 
-Not verified: arm/aarch64/riscv64/loongarch64 runtime; real-hardware hibernate round-trip; real-hardware EFI/NVRAM writes; dm-crypt/LVM resume; physical VT USB HID DELETE.
+Verified on riscv64 QEMU with Debian Linux 6.12 and 7.3:
+- libc and static builds, CTest and interactive shell smoke test.
+- ext4 boot with read-only or writable root, UUID/LABEL lookup and GPT PARTUUID/PARTLABEL lookup.
+- Serial rescue and boot retry, VirtIO storage with Debian `.ko.xz` modules, and VirtIO network DHCP.
+- The module scan accepts `.ko`, `.ko.gz`, `.ko.xz` and `.ko.zst`. Compressed modules require the target kernel's matching decompressor.
+
+Full-system arm/aarch64/loongarch64 runtime, riscv64 board boot, EFI and hibernation round-trip are pending verification. Real-hardware EFI/NVRAM writes, dm-crypt/LVM resume and DELETE-to-rescue via a physical USB keyboard are also pending.
 
 ## Repository Layout
 

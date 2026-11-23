@@ -87,13 +87,23 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install deps
-        run: sudo apt-get update && sudo apt-get install -y cmake gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu
+        run: sudo apt-get update && sudo apt-get install -y cmake gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu libc6-dev-riscv64-cross qemu-user python3
+      - name: riscv64 libc build and tests under QEMU
+        run: |
+          cmake -S . -B build-riscv64-libc -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_SYSTEM_NAME=Linux -DCMAKE_SYSTEM_PROCESSOR=riscv64 \
+            -DCMAKE_C_COMPILER=riscv64-linux-gnu-gcc \
+            '-DCMAKE_CROSSCOMPILING_EMULATOR=qemu-riscv64;-L;/usr/riscv64-linux-gnu'
+          cmake --build build-riscv64-libc -j"$(nproc)"
+          ctest --test-dir build-riscv64-libc --output-on-failure
       - name: nolibc riscv64 cross build
         run: |
           CC=riscv64-linux-gnu-gcc cmake -S . -B build-riscv64 -DUSE_HOST_LIBC=OFF \
             -DAETHER_ARCH=riscv64 -DCMAKE_BUILD_TYPE=Release
           cmake --build build-riscv64 -j"$(nproc)"
           file build-riscv64/aether
+      - name: riscv64 nolibc shell smoke test
+        run: python3 tools/pty_test.py /usr/bin/qemu-riscv64 "$PWD/build-riscv64/aether"
       - uses: actions/upload-artifact@v4
         with:
           name: aether-riscv64-nolibc

@@ -7,6 +7,7 @@
  *
  * 拯救 shell builtins:cmdline / rescue-boot [override] / efi-cmdline。
  */
+#include <limits.h>
 #include <stddef.h>
 
 #include "boot.h"
@@ -16,17 +17,23 @@
 #include "shell/shell_internal.h"
 #include "syscall_shim.h"
 #include "sysfsutil.h"
+#include "statx.h"
 #include "uevent.h"
 #include "modload.h"
 #include "ttyutil.h"
 #include "util.h"
 
 #define NEWROOT "/newroot"
-#define STASH   ".aether_stash"
 
 /* 前向声明：DELETE 后台监听的收尾函数（定义在本文件下方） */
 static void aether_del_watch_stop(void);
 static int  aether_del_pressed(void);
+static int switch_mounted_root(const char *newroot, const char *init);
+static int exec_real_init(const char *init_path);
+static void prepare_rescue_boot(void);
+static size_t copy_str(char *dst, size_t cap, const char *src);
+static volatile int g_del_rescue;
+static int g_modules_loaded;
 
 /* =============== 灾难回退：失败时自动尝试全部可用终端/串口 ===============
  * PID 1 挂载/解析/boot 任一环节失败，不能直接退（内核 panic）；
@@ -47,7 +54,10 @@ static int try_open_console(const char *path)
     long fd = sys_open(path, O_RDWR | O_NOCTTY | O_NONBLOCK, 0);
     if (AETHER_IS_ERR(fd)) return -1;
     aether_termios_t t;
-    if (sys_ioctl((int)fd, TTY_IOC_TCGETS, (unsigned long)&t) != 0) {
+    long flags = sys_fcntl((int)fd, F_GETFL, 0);
+    /* 非阻塞只用于打开串口。shell 及其确认提示需要阻塞读。 */
+    if (sys_ioctl((int)fd, TTY_IOC_TCGETS, (unsigned long)&t) != 0 ||
+        AETHER_IS_ERR(flags) || sys_fcntl((int)fd, F_SETFL, flags & ~O_NONBLOCK) != 0) {
         sys_close((int)fd);
         return -1;
     }
@@ -72,6 +82,7 @@ static void rescue_kill_all(int *pids, int n)
  * 成功不返回（已 exec 真正的 init，init 成为 PID 1）；失败返回 -1，调用方重新进入救援。 */
 static int rescue_retry_boot(void)
 {
+    prepare_rescue_boot();
     aether_cmdline_t opts;
     char ov[1800];
     size_t olen = 0;
@@ -95,13 +106,81 @@ static int rescue_retry_boot(void)
     return aether_boot_attempt(&opts);
 }
 
+typedef struct {
+    char root[512];
+    char init[512];
+} switch_root_request_t;
+
+static void switch_root_request_path(long pid, char path[64])
+{
+    char suffix[24];
+    aether_u64toa(suffix, sizeof(suffix), (unsigned long)pid);
+    size_t len = copy_str(path, 64, "/etc/.rescue-switch-root-");
+    copy_str(path + len, 64 - len, suffix);
+}
+
+int aether_request_switch_root(const char *newroot, const char *init)
+{
+    switch_root_request_t req = { 0 };
+    if (aether_strlen(init) >= sizeof(req.init) || aether_strlen(newroot) >= sizeof(req.root)) {
+        elog_err("switch_root: path too long");
+        return 1;
+    }
+    long pid = sys_getpid();
+    if (pid == 1) return switch_mounted_root(newroot, init) != 0;
+    if (newroot[0] == '/') {
+        copy_str(req.root, sizeof(req.root), newroot);
+    } else {
+        char cwd[sizeof(req.root)];
+        if (sys_getcwd(cwd, sizeof(cwd)) < 0 ||
+            aether_strlen(cwd) + aether_strlen(newroot) + 2 > sizeof(req.root) ||
+            aether_path_join(req.root, sizeof(req.root), cwd, newroot) != 0) {
+            elog_err("switch_root: cannot resolve %s", newroot);
+            return 1;
+        }
+    }
+    copy_str(req.init, sizeof(req.init), init);
+    char path[64];
+    switch_root_request_path(pid, path);
+    long fd = sys_open(path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0600);
+    if (AETHER_IS_ERR(fd)) {
+        elog_err("switch_root: cannot submit request (%d)", AETHER_ERR_CODE(fd));
+        return 1;
+    }
+    long n = sys_write((int)fd, &req, sizeof(req));
+    sys_close((int)fd);
+    if (n != (long)sizeof(req)) {
+        sys_unlink(path);
+        elog_err("switch_root: cannot write request");
+        return 1;
+    }
+    aether_exit(AETHER_RESCUE_EXIT_SWITCH);
+}
+
+static int rescue_switch_root(long pid)
+{
+    switch_root_request_t req;
+    char path[64];
+    size_t len = 0;
+    switch_root_request_path(pid, path);
+    int r = aether_read_file(path, &req, sizeof(req), &len);
+    sys_unlink(path);
+    if (r != 0 || len != sizeof(req) || req.root[0] != '/' ||
+        req.root[sizeof(req.root) - 1] || req.init[sizeof(req.init) - 1] || !req.init[0]) {
+        elog_err("switch_root: invalid request");
+        return -1;
+    }
+    return switch_mounted_root(req.root, req.init);
+}
+
 static void rescue_consoles(void)
 {
-    /* 常驻救援：子进程以 42（AETHER_RESCUE_EXIT_BOOT）退出 → 由 PID 1 本人继续启动；
+    /* 常驻救援：shell 退出码携带启动请求，由 PID 1 本人切根并继续启动；
      * 失败（或其他退出）→ 重新拉起整套救援环境。PID 1 永不退出。 */
     for (;;) {
     /* 先停掉后台 DELETE 监听并恢复控制台（rescue shell 自带 cbreak/restore） */
     aether_del_watch_stop();
+    g_del_rescue = 0;
     int pids[CONSOLE_CANDIDATES_MAX * 3 + 8];
     /* 去重：/dev/console 是内核 console= 列表的别名，
      * console=ttyS0 时 /dev/console 与 /dev/ttyS0 是同一设备，
@@ -158,7 +237,7 @@ static void rescue_consoles(void)
                 elog_info(" commands: rescue-boot [root=/dev/... rw] | efi-cmdline [edit] | cmdline | exit (= continue boot)");
                 elog_info("=========================================");
                 {
-                    static char *const rescue_env[] = { (char *)"AETHER_INIT=rescue", 0 };
+                    static char *rescue_env[] = { (char *)"AETHER_INIT=rescue", 0 };
                     shell_main(1, (char *[]){ (char *)"aether", 0 }, rescue_env);
                 }
                 aether_exit(0);
@@ -203,7 +282,7 @@ static void rescue_consoles(void)
     if (nch == 0) {
         elog_info("rescue: no usable tty/serial found; using current stdio");
         {
-            static char *const rescue_env[] = { (char *)"AETHER_INIT=rescue", 0 };
+            static char *rescue_env[] = { (char *)"AETHER_INIT=rescue", 0 };
             shell_main(1, (char *[]){ (char *)"aether", 0 }, rescue_env);
         }
         elog_info("init: stdio rescue shell exited -- continuing boot");
@@ -211,8 +290,9 @@ static void rescue_consoles(void)
         elog_err("rescue: retry boot failed -- restarting rescue shell");
         continue;
     }
-    /* PID 1：等子进程；任一以 42 退出 → 立即停掉其余子进程，PID 1 本人继续启动 */
+    /* PID 1 收到启动请求后停掉其余救援子进程，再切根。 */
     int retry = 0;
+    long requester = 0;
     int live = nch;
     while (live > 0 && !retry) {
         int status = 0;
@@ -222,11 +302,21 @@ static void rescue_consoles(void)
             break; /* ECHILD：没有子进程了 */
         }
         live--;
-        if (((status >> 8) & 0xff) == AETHER_RESCUE_EXIT_BOOT) retry = 1;
+        for (int i = 0; i < nch; i++) {
+            if (pids[i] == r) pids[i] = 0;
+        }
+        if ((status & 0x7f) == 0) {
+            int code = (status >> 8) & 0xff;
+            if (code == AETHER_RESCUE_EXIT_BOOT || code == AETHER_RESCUE_EXIT_SWITCH) {
+                retry = code;
+                requester = r;
+            }
+        }
     }
     rescue_kill_all(pids, nch);
     if (retry) {
-        if (rescue_retry_boot() == 0) return; /* 不可达（已 exec） */
+        if (retry == AETHER_RESCUE_EXIT_SWITCH) rescue_switch_root(requester);
+        else rescue_retry_boot();
         elog_err("rescue: retry boot failed -- back to rescue shell");
     }
     /* 全部子进程退出（或 retry 失败）→ 重新进入救援（PID 1 常驻，绝不退出/panic） */
@@ -263,16 +353,30 @@ static size_t copy_str(char *dst, size_t cap, const char *src)
     return i;
 }
 
+static int cmdline_space(char c)
+{
+    return c == ' ' || c == '\t' || c == '\n' || c == '\r';
+}
+
 int aether_parse_cmdline(const char *cmdline, aether_cmdline_t *out)
 {
     cmdline_zero(out);
     const char *p = cmdline;
     while (*p) {
-        while (*p == ' ' || *p == '\t') p++;
+        while (cmdline_space(*p)) p++;
         if (*p == '\0') break;
         const char *tok = p;
-        while (*p && *p != ' ' && *p != '\t' && *p != '\n') p++;
+        int quoted = 0;
+        while (*p && (quoted || !cmdline_space(*p))) {
+            if (*p == '"') quoted = !quoted;
+            p++;
+        }
         size_t tlen = (size_t)(p - tok);
+        if (*tok == '"') {
+            tok++;
+            tlen--;
+            if (tlen && tok[tlen - 1] == '"') tlen--;
+        }
 
         const char *eq = 0;
         for (size_t i = 0; i < tlen; i++) {
@@ -289,6 +393,11 @@ int aether_parse_cmdline(const char *cmdline, aether_cmdline_t *out)
         }
         size_t klen = (size_t)(eq - tok), vlen = tlen - klen - 1;
         const char *val = eq + 1;
+        if (vlen && val[0] == '"') {
+            val++;
+            vlen--;
+            if (vlen && val[vlen - 1] == '"') vlen--;
+        }
         if (klen == 4 && aether_strncmp(tok, "root", 4) == 0) {
             size_t n = vlen < sizeof(out->root) - 1 ? vlen : sizeof(out->root) - 1;
             for (size_t i = 0; i < n; i++) out->root[i] = val[i];
@@ -355,9 +464,10 @@ int aether_cmdline_file(const char *path, aether_cmdline_t *out)
 
 /* =============== root 解析 =============== */
 
-static int uuid_parse(const char *s, unsigned char out[16])
+static int uuid_parse(const char *s, unsigned char *out, size_t cap)
 {
-    int ni = 0, oi = 0;
+    int ni = 0;
+    size_t oi = 0;
     int nib[2] = { -1, -1 };
     for (const char *q = s; *q; q++) {
         char c = *q;
@@ -369,12 +479,12 @@ static int uuid_parse(const char *s, unsigned char out[16])
         else return -1;
         nib[ni++] = d;
         if (ni == 2) {
-            if (oi >= 16) return -1;
+            if (oi >= cap) return -1;
             out[oi++] = (unsigned char)((nib[0] << 4) | nib[1]);
             ni = 0;
         }
     }
-    return (oi == 16 && ni == 0) ? 0 : -1;
+    return (oi == cap && ni == 0) ? 0 : -1;
 }
 
 static void devpath(char *buf, size_t cap, const char *name)
@@ -386,37 +496,127 @@ static void devpath(char *buf, size_t cap, const char *name)
     buf[d] = '\0';
 }
 
-static int part_sysfs(char *buf, size_t cap, const char *partname, const char *attr)
+static const char *block_uevent_value(const char *dir, const char *key, char *buf, size_t cap)
 {
-    char parent[32];
-    int is_part = 0;
-    aether_classify_part(partname, parent, sizeof(parent), &is_part);
-    const char *pre = "/sys/block/";
-    size_t d = 0;
-    for (size_t i = 0; pre[i] && d + 1 < cap; i++) buf[d++] = pre[i];
-    for (size_t i = 0; parent[i] && d + 1 < cap; i++) buf[d++] = parent[i];
-    if (d + 1 >= cap) return -1;
-    buf[d++] = '/';
-    for (size_t i = 0; partname[i] && d + 1 < cap; i++) buf[d++] = partname[i];
-    if (d + 1 >= cap) return -1;
-    buf[d++] = '/';
-    for (size_t i = 0; attr[i] && d + 1 < cap; i++) buf[d++] = attr[i];
-    buf[d] = '\0';
+    char path[96];
+    if (aether_path_join(path, sizeof(path), dir, "uevent") != 0) return 0;
+    size_t len;
+    if (aether_read_file(path, buf, cap - 1, &len) != 0) return 0;
+    buf[len] = '\0';
+    size_t key_len = aether_strlen(key);
+    for (char *line = buf; *line;) {
+        char *end = line;
+        while (*end && *end != '\n') end++;
+        char *next = *end ? end + 1 : end;
+        *end = '\0';
+        if (has_prefix(line, key)) return line + key_len;
+        line = next;
+    }
     return 0;
 }
 
+static unsigned int disk_le32(const unsigned char *p)
+{
+    return (unsigned)p[0] | ((unsigned)p[1] << 8) |
+           ((unsigned)p[2] << 16) | ((unsigned)p[3] << 24);
+}
+
+static int disk_read_at(int fd, long offset, unsigned char *buf, size_t size)
+{
+    return sys_lseek(fd, offset, SEEK_SET) == offset &&
+           aether_read_all(fd, (char *)buf, size) == (long)size;
+}
+
+static int gpt_uuid_matches(int fd, unsigned int part, const char *want)
+{
+    unsigned char expected[16], header[92], id[16];
+    unsigned int sector = 0;
+    if (uuid_parse(want, expected, sizeof(expected)) != 0 ||
+        sys_ioctl(fd, 0x1268 /* BLKSSZGET */, (unsigned long)&sector) != 0 ||
+        sector < 512 || sector > 65536 ||
+        !disk_read_at(fd, sector, header, sizeof(header)) ||
+        aether_strncmp((const char *)header, "EFI PART", 8) != 0)
+        return 0;
+
+    unsigned long long table = disk_le32(header + 72) | ((unsigned long long)disk_le32(header + 76) << 32);
+    unsigned int count = disk_le32(header + 80), size = disk_le32(header + 84);
+    if (part > count || size < 128 || size > 4096 || (size & 127) || table < 2) return 0;
+    unsigned long long entry = (unsigned long long)(part - 1) * size + 16; /* unique GUID */
+    if (entry > LONG_MAX - sizeof(id) || table > (LONG_MAX - sizeof(id) - entry) / sector ||
+        !disk_read_at(fd, (long)(table * sector + entry), id, sizeof(id)))
+        return 0;
+
+    /* GPT GUID 的前三个字段是小端整数，其余字段按字节存储。 */
+    static const unsigned char order[16] = { 3, 2, 1, 0, 5, 4, 7, 6, 8, 9, 10, 11, 12, 13, 14, 15 };
+    for (size_t i = 0; i < sizeof(id); i++) {
+        if (expected[i] != id[order[i]]) return 0;
+    }
+    return 1;
+}
+
+static int disk_partuuid_matches(const char *partdir, const char *want)
+{
+    /* 旧 Linux 的分区 uevent 有 PARTN，但没有 PARTUUID。读取父盘分区表。 */
+    char uevent[512], parent[80], disk[64];
+    const char *value = block_uevent_value(partdir, "PARTN=", uevent, sizeof(uevent));
+    long part = value ? aether_atol(value) : 0;
+    if (part <= 0 || part > 255 ||
+        aether_path_join(parent, sizeof(parent), partdir, "..") != 0)
+        return 0;
+    value = block_uevent_value(parent, "DEVNAME=", uevent, sizeof(uevent));
+    if (!value || aether_path_join(disk, sizeof(disk), "/dev", value) != 0) return 0;
+
+    long fd = sys_open(disk, O_RDONLY, 0);
+    if (AETHER_IS_ERR(fd)) return 0;
+    unsigned char mbr[512], expected[5];
+    int match = 0;
+    if (disk_read_at((int)fd, 0, mbr, sizeof(mbr)) && mbr[510] == 0x55 && mbr[511] == 0xaa) {
+        int protective = 0;
+        for (int i = 0; i < 4; i++) {
+            if (mbr[446 + 16 * i + 4] == 0xee) protective = 1;
+        }
+        if (protective) {
+            match = gpt_uuid_matches((int)fd, (unsigned int)part, want);
+        } else if (aether_strlen(want) == 11 && want[8] == '-' &&
+                   uuid_parse(want, expected, sizeof(expected)) == 0 && expected[4] == part) {
+            match = expected[0] == mbr[443] && expected[1] == mbr[442] &&
+                    expected[2] == mbr[441] && expected[3] == mbr[440];
+        }
+    }
+    sys_close((int)fd);
+    return match;
+}
+
+static int part_matches(const char *partname, const char *want, int uuid)
+{
+    char dir[64], buf[512];
+    if (aether_path_join(dir, sizeof(dir), "/sys/class/block", partname) != 0) return 0;
+    const char *value = block_uevent_value(dir, uuid ? "PARTUUID=" : "PARTNAME=", buf, sizeof(buf));
+    if (!value) return uuid && disk_partuuid_matches(dir, want);
+    if (!uuid) return aether_streq(value, want);
+    while (*value && *want) {
+        char a = *value++, b = *want++;
+        if (a >= 'A' && a <= 'F') a += 'a' - 'A';
+        if (b >= 'A' && b <= 'F') b += 'a' - 'A';
+        if (a != b) return 0;
+    }
+    return *value == *want;
+}
+
 static int ext4_probe(const char *devpath, unsigned char uuid_out[16], char label_out[17])
-{    char buf[2048];
+{
+    char buf[2048];
     long fd = sys_open(devpath, O_RDONLY, 0);
     if (AETHER_IS_ERR(fd)) return -2; /* 打不开：权限不足 */
     long n = sys_read((int)fd, buf, sizeof(buf));
     sys_close((int)fd);
     if (n < 2048) return -1; /* 太短/读失败：当作不是 ext4 */
-    unsigned magic = (unsigned char)buf[1080] | ((unsigned char)buf[1081] << 8);
+    const unsigned char *super = (const unsigned char *)buf + 1024;
+    unsigned magic = super[0x38] | (super[0x39] << 8);
     if (magic != 0xEF53) return -1;
-    for (int i = 0; i < 16; i++) uuid_out[i] = (unsigned char)buf[1184 + i];
+    for (int i = 0; i < 16; i++) uuid_out[i] = super[0x68 + i];
     for (int i = 0; i < 16; i++) {
-        unsigned char c = (unsigned char)buf[1200 + i];
+        unsigned char c = super[0x78 + i];
         label_out[i] = (c >= 0x20 && c < 0x7F) ? (char)c : ' ';
     }
     label_out[16] = '\0';
@@ -433,23 +633,15 @@ static int vfat_probe(const char *devpath, unsigned char vol_id_out[4], char lab
     sys_close((int)fd);
     if (n < 512) return -1;
     if ((unsigned char)buf[510] != 0x55 || (unsigned char)buf[511] != 0xaa) return -1;
-    int fat32 = -1;
-    for (int i = 0x36; i < 0x44 && i + 5 < 512; i++)
-        if (buf[i] == 'F' && buf[i+1] == 'A' && buf[i+2] == 'T') { fat32 = 0; goto found; }
-    for (int i = 0x52; i < 0x5A && i + 5 < 512; i++)
-        if (buf[i] == 'F' && buf[i+1] == 'A' && buf[i+2] == 'T') { fat32 = 1; goto found; }
-    return -1;
-found:
-    vol_id_out[0] = (unsigned char)buf[0x43];
-    vol_id_out[1] = (unsigned char)buf[0x44];
-    vol_id_out[2] = (unsigned char)buf[0x45];
-    vol_id_out[3] = (unsigned char)buf[0x46];
-    {
-        int lb = fat32 ? 0x47 : 0x2B;
-        for (int i = 0; i < 11; i++) label_out[i] = (buf[lb+i] >= 0x20 && buf[lb+i] < 0x7F) ? buf[lb+i] : ' ';
-        label_out[11] = '\0';
-        for (int i = 10; i >= 0 && label_out[i] == ' '; i--) label_out[i] = '\0';
-    }
+    int fat32 = buf[22] == 0 && buf[23] == 0;
+    if (aether_strncmp(buf + (fat32 ? 0x52 : 0x36), "FAT", 3) != 0) return -1;
+    int serial = fat32 ? 0x43 : 0x27;
+    /* UUID 显示为大端十六进制，卷序列号在磁盘上为小端。 */
+    for (int i = 0; i < 4; i++) vol_id_out[i] = (unsigned char)buf[serial + 3 - i];
+    int lb = serial + 4;
+    for (int i = 0; i < 11; i++) label_out[i] = (buf[lb+i] >= 0x20 && buf[lb+i] < 0x7F) ? buf[lb+i] : ' ';
+    label_out[11] = '\0';
+    for (int i = 10; i >= 0 && label_out[i] == ' '; i--) label_out[i] = '\0';
     return 0;
 }
 
@@ -478,6 +670,7 @@ static int btrfs_probe(const char *devpath, unsigned char uuid_out[16])
 typedef struct {
     const char *want;           /* 期望字符串（PARTUUID/PARTLABEL/LABEL 直接比；UUID 用 bin） */
     unsigned char bin[16];      /* UUID 形式 */
+    size_t uuid_len;
     int mode;                   /* 0=partuuid, 1=partlabel, 2=uuid, 3=label */
     char out[64];               /* 命中的 /dev/<name> */
     int found;
@@ -487,27 +680,8 @@ typedef struct {
 static int probe_cb(const char *devpath, const char *partname, void *vctx)
 {
     probe_ctx_t *ctx = vctx;
-    char path[96];
-
     if (ctx->mode == 0 || ctx->mode == 1) {
-        /* partuuid / partlabel 在 sysfs */
-        const char *attr = ctx->mode == 0 ? "partuuid" : "partlabel";
-        if (part_sysfs(path, sizeof(path), partname, attr) != 0) return 0;
-        char buf[96];
-        size_t len = 0;
-        if (aether_read_file(path, buf, sizeof(buf) - 1, &len) != 0) return 0;
-        buf[len] = '\0';
-        while (len > 0 && (buf[len - 1] == '\n' || buf[len - 1] == '\r')) buf[--len] = '\0';
-        /* 大小写不敏感比较（uuid） */
-        const char *a = buf, *b = ctx->want;
-        size_t la = aether_strlen(a), lb = aether_strlen(b);
-        if (la != lb) return 0;
-        for (size_t i = 0; i < la; i++) {
-            char ca = a[i], cb = b[i];
-            if (ca >= 'A' && ca <= 'Z') ca += 32;
-            if (cb >= 'A' && cb <= 'Z') cb += 32;
-            if (ca != cb) return 0;
-        }
+        if (!part_matches(partname, ctx->want, ctx->mode == 0)) return 0;
         copy_str(ctx->out, sizeof(ctx->out), devpath);
         ctx->found = 1;
         return 1;
@@ -515,42 +689,23 @@ static int probe_cb(const char *devpath, const char *partname, void *vctx)
 
     if (ctx->mode == 2) {
         unsigned char uuid[16];
-        char label[17];
-        int rc = ext4_probe(devpath, uuid, label);
-        if (rc == 0) {
-            for (int i = 0; i < 16; i++) if (uuid[i] != ctx->bin[i]) goto try_vfat;
-            copy_str(ctx->out, sizeof(ctx->out), devpath);
-            ctx->found = 1;
-            return 1;
+        int rc;
+        if (ctx->uuid_len == 4) {
+            char label[12];
+            rc = vfat_probe(devpath, uuid, label);
+        } else {
+            char label[17];
+            rc = ext4_probe(devpath, uuid, label);
+            if (rc == -1) rc = btrfs_probe(devpath, uuid);
         }
         if (rc == -2) ctx->ioerr = 1;
-try_vfat:
-        {
-            unsigned char vol[4];
-            char vlabel[12];
-            rc = vfat_probe(devpath, vol, vlabel);
-            if (rc == 0) {
-                /* vfat UUID 只有 4 字节；ctx->bin 前 4 字节存 vol_id 的期望值 */
-                if (ctx->bin[0] == vol[0] && ctx->bin[1] == vol[1] && ctx->bin[2] == vol[2] && ctx->bin[3] == vol[3]) {
-                    copy_str(ctx->out, sizeof(ctx->out), devpath);
-                    ctx->found = 1;
-                    return 1;
-                }
-            } else if (rc == -2) ctx->ioerr = 1;
+        if (rc != 0) return 0;
+        for (size_t i = 0; i < ctx->uuid_len; i++) {
+            if (uuid[i] != ctx->bin[i]) return 0;
         }
-        /* btrfs：fsid 与 ext4 形式相同（16 字节） */
-        {
-            unsigned char buuid[16];
-            rc = btrfs_probe(devpath, buuid);
-            if (rc == 0) {
-                for (int i = 0; i < 16; i++) if (buuid[i] != ctx->bin[i]) return 0;
-                copy_str(ctx->out, sizeof(ctx->out), devpath);
-                ctx->found = 1;
-                return 1;
-            }
-            if (rc == -2) ctx->ioerr = 1;
-        }
-        return 0;
+        copy_str(ctx->out, sizeof(ctx->out), devpath);
+        ctx->found = 1;
+        return 1;
     }
 
     if (ctx->mode == 3) {
@@ -713,9 +868,20 @@ static void aether_populate_by_uuid(void)
     elog_info("aether: /dev/disk/by-uuid populated (%d link%s)", ctx.created, ctx.created == 1 ? "" : "s");
 }
 
-int aether_resolve_root(const char *spec, char *out, size_t cap)
+static void prepare_rescue_boot(void)
 {
-    if (!spec || !*spec) { elog_err("root= is empty"); return -1; }
+    /* DELETE 可能发生在模块加载或建立 UUID 链接之前。 */
+    if (!g_modules_loaded) {
+        aether_load_modules();
+        g_modules_loaded = 1;
+    }
+    aether_populate_by_uuid();
+}
+
+/* -2 表示设备暂未找到，rootwait 可以重试。 */
+static int resolve_root(const char *spec, char *out, size_t cap, int quiet)
+{
+    if (!spec || !*spec) { if (!quiet) elog_err("root= is empty"); return -1; }
 
     if (has_prefix(spec, "PARTUUID=") || has_prefix(spec, "partuuid=")) {
         probe_ctx_t ctx; ctx.want = spec + 9; ctx.mode = 0; ctx.found = 0; ctx.ioerr = 0;
@@ -723,8 +889,8 @@ int aether_resolve_root(const char *spec, char *out, size_t cap)
             copy_str(out, cap, ctx.out);
             return 0;
         }
-        elog_err("root=%s: no partition with that PARTUUID%s", spec, ctx.ioerr ? " (some partitions unreadable, need root)" : "");
-        return -1;
+        if (!quiet) elog_err("root=%s: no partition with that PARTUUID%s", spec, ctx.ioerr ? " (some partitions unreadable, need root)" : "");
+        return -2;
     }
     if (has_prefix(spec, "PARTLABEL=") || has_prefix(spec, "partlabel=")) {
         probe_ctx_t ctx; ctx.want = spec + 10; ctx.mode = 1; ctx.found = 0; ctx.ioerr = 0;
@@ -732,54 +898,23 @@ int aether_resolve_root(const char *spec, char *out, size_t cap)
             copy_str(out, cap, ctx.out);
             return 0;
         }
-        elog_err("root=%s: no partition with that PARTLABEL%s", spec, ctx.ioerr ? " (some partitions unreadable, need root)" : "");
-        return -1;
+        if (!quiet) elog_err("root=%s: no partition with that PARTLABEL%s", spec, ctx.ioerr ? " (some partitions unreadable, need root)" : "");
+        return -2;
     }
     if (has_prefix(spec, "UUID=") || has_prefix(spec, "uuid=")) {
         probe_ctx_t ctx; ctx.mode = 2; ctx.found = 0; ctx.ioerr = 0;
         const char *v = spec + 5;
-        if (has_prefix(v, "8be4") || 0) { }
-        /* vfat 短式 UUID（XXXX-XXXX）：前 4 字节存 vol_id；否则按 16 字节 UUID */
-        size_t vlen = aether_strlen(v);
-        int dashes = 0;
-        for (size_t i = 0; v[i]; i++) if (v[i] == '-') dashes++;
-        if (dashes == 1 && vlen == 9) {
-            /* 解析 XXXX-XXXX */
-            unsigned x0 = 0, x1 = 0;
-            char c;
-            int ok = 1;
-            for (int i = 0; i < 4 && ok; i++) {
-                c = v[i];
-                int d;
-                if (c >= '0' && c <= '9') d = c - '0';
-                else if (c >= 'a' && c <= 'f') d = c - 'a' + 10;
-                else if (c >= 'A' && c <= 'F') d = c - 'A' + 10;
-                else { ok = 0; break; }
-                x0 = (x0 << 4) | (unsigned)d;
-            }
-            for (int i = 5; i < 9 && ok; i++) {
-                c = v[i];
-                int d;
-                if (c >= '0' && c <= '9') d = c - '0';
-                else if (c >= 'a' && c <= 'f') d = c - 'a' + 10;
-                else if (c >= 'A' && c <= 'F') d = c - 'A' + 10;
-                else { ok = 0; break; }
-                x1 = (x1 << 4) | (unsigned)d;
-            }
-            if (!ok) { elog_err("root=UUID=%s: bad format", v); return -1; }
-            ctx.bin[0] = (unsigned char)(x0 & 0xff);
-            ctx.bin[1] = (unsigned char)((x0 >> 8) & 0xff);
-            ctx.bin[2] = (unsigned char)(x1 & 0xff);
-            ctx.bin[3] = (unsigned char)((x1 >> 8) & 0xff);
-        } else {
-            if (uuid_parse(v, ctx.bin) != 0) { elog_err("root=UUID=%s: bad format", v); return -1; }
+        ctx.uuid_len = aether_strlen(v) == 9 && v[4] == '-' ? 4 : 16;
+        if (uuid_parse(v, ctx.bin, ctx.uuid_len) != 0) {
+            if (!quiet) elog_err("root=UUID=%s: bad format", v);
+            return -1;
         }
         if (foreach_partition(probe_cb, &ctx) > 0 && ctx.found) {
             copy_str(out, cap, ctx.out);
             return 0;
         }
-        elog_err("root=%s: no partition with that UUID (ext4/vfat/btrfs only)%s", spec, ctx.ioerr ? " (some partitions unreadable, need root)" : "");
-        return -1;
+        if (!quiet) elog_err("root=%s: no partition with that UUID (ext4/vfat/btrfs only)%s", spec, ctx.ioerr ? " (some partitions unreadable, need root)" : "");
+        return -2;
     }
     if (has_prefix(spec, "LABEL=") || has_prefix(spec, "label=")) {
         probe_ctx_t ctx; ctx.want = spec + 6; ctx.mode = 3; ctx.found = 0; ctx.ioerr = 0;
@@ -787,18 +922,26 @@ int aether_resolve_root(const char *spec, char *out, size_t cap)
             copy_str(out, cap, ctx.out);
             return 0;
         }
-        elog_err("root=%s: no partition with that LABEL (ext4/vfat only)%s", spec, ctx.ioerr ? " (some partitions unreadable, need root)" : "");
-        return -1;
+        if (!quiet) elog_err("root=%s: no partition with that LABEL (ext4/vfat only)%s", spec, ctx.ioerr ? " (some partitions unreadable, need root)" : "");
+        return -2;
     }
     if (spec[0] == '/') {
         long fd = sys_open(spec, O_RDONLY, 0);
-        if (AETHER_IS_ERR(fd)) { elog_err("root=%s: does not exist or not accessible (%d)", spec, AETHER_ERR_CODE(fd)); return -1; }
+        if (AETHER_IS_ERR(fd)) {
+            if (!quiet) elog_err("root=%s: does not exist or not accessible (%d)", spec, AETHER_ERR_CODE(fd));
+            return fd == -2 || fd == -6 || fd == -19 ? -2 : -1; /* ENOENT / ENXIO / ENODEV */
+        }
         sys_close((int)fd);
         copy_str(out, cap, spec);
         return 0;
     }
-    elog_err("root=%s: cannot parse (supported: /dev/*, PARTUUID=, PARTLABEL=, UUID=, LABEL=)", spec);
+    if (!quiet) elog_err("root=%s: cannot parse (supported: /dev/*, PARTUUID=, PARTLABEL=, UUID=, LABEL=)", spec);
     return -1;
+}
+
+int aether_resolve_root(const char *spec, char *out, size_t cap)
+{
+    return resolve_root(spec, out, cap, 0);
 }
 
 /* =============== 休眠恢复（resume=） =============== */
@@ -812,7 +955,7 @@ static int swap_probe(const char *devpath, unsigned char uuid_out[16])
 {
     long fd = sys_open(devpath, O_RDONLY, 0);
     if (AETHER_IS_ERR(fd)) return -1;
-    unsigned char buf[4104];
+    unsigned char buf[4096];
     long r = sys_read((int)fd, buf, sizeof(buf));
     sys_close((int)fd);
     if (AETHER_IS_ERR(r) || (size_t)r < sizeof(buf)) return -1;
@@ -910,7 +1053,7 @@ static int aether_resolve_resume(const char *spec, char *majmin, size_t majmin_c
         }
     } else if (has_prefix(spec, "UUID=") || has_prefix(spec, "uuid=")) {
         unsigned char want[16];
-        if (uuid_parse(spec + 5, want) != 0) { elog_err("resume: invalid UUID '%s'", spec + 5); return -1; }
+        if (uuid_parse(spec + 5, want, sizeof(want)) != 0) { elog_err("resume: invalid UUID '%s'", spec + 5); return -1; }
         /* 优先 /dev/disk/by-uuid/<uuid>(由 aether_populate_by_uuid 创建)——
          * 最可靠：不依赖本函数的签名探测（v1 swap 可识别；mkswap --swap-uuid 变体等边角情况也兜得住） */
         char linkpath[160];
@@ -1060,6 +1203,16 @@ static void try_hibernate_resume(const aether_cmdline_t *opts_orig)
         elog_err("resume: could not parse '%s', hibernation resume skipped (boot continues)", opts->resume);
         return;
     }
+    /* 写入 resume 会立即触发恢复，必须先设置 swapfile 的偏移。 */
+    if (opts->resume_offset != 0) {
+        char obuf[24];
+        size_t n = aether_u64toa(obuf, sizeof(obuf), opts->resume_offset);
+        if (sysfs_write_line("/sys/power/resume_offset", obuf, n) != 0) {
+            elog_err("resume: write to /sys/power/resume_offset failed");
+            return;
+        }
+        elog_info("resume: wrote /sys/power/resume_offset=%s (PAGE_SIZE units)", obuf);
+    }
     if (sysfs_write_line("/sys/power/resume", majmin, aether_strlen(majmin)) != 0) {
         elog_err("resume: write to /sys/power/resume failed (permission? kernel disabled?)");
         return;
@@ -1068,63 +1221,158 @@ static void try_hibernate_resume(const aether_cmdline_t *opts_orig)
         elog_info("resume: wrote /sys/power/resume=%s (device %s)", majmin, devpath);
     else
         elog_info("resume: wrote /sys/power/resume=%s", majmin);
-    if (opts->resume_offset != 0) {
-        char obuf[24];
-        size_t n = aether_u64toa(obuf, sizeof(obuf), opts->resume_offset);
-        if (sysfs_write_line("/sys/power/resume_offset", obuf, n) != 0)
-            elog_err("resume: write to /sys/power/resume_offset failed");
-        else
-            elog_info("resume: wrote /sys/power/resume_offset=%s (PAGE_SIZE units)", obuf);
-    }
 }
 
 /* =============== 挂载参数 =============== */
 
-/* 只解析 ro 为挂载标志；其余 rootflags（如 subvol=@）原样透传给内核 */
-static int ro_flag_of(const char *s)
+/* ro/rw 是 VFS 挂载选项，文件系统只接收其余 rootflags。 */
+static void root_mount_data(const char *src, char *dst)
 {
-    const char *p = s;
-    while (*p) {
-        const char *item = p;
-        while (*p && *p != ',') p++;
-        size_t ilen = (size_t)(p - item);
-        if (ilen == 2 && aether_strncmp(item, "ro", 2) == 0) return MS_RDONLY;
-        if (*p == ',') p++;
+    char *out = dst;
+    while (*src) {
+        const char *item = src;
+        while (*src && *src != ',') src++;
+        size_t len = (size_t)(src - item);
+        if (len && !(len == 2 && item[0] == 'r' && (item[1] == 'o' || item[1] == 'w'))) {
+            if (out != dst) *out++ = ',';
+            for (size_t i = 0; i < len; i++) *out++ = item[i];
+        }
+        if (*src) src++;
     }
-    return 0;
+    *out = '\0';
 }
 
-/* =============== pivot_root + exec =============== */
+/* =============== 切根 + exec =============== */
 
-static int do_final_switch(const char *init_path)
+typedef struct {
+    int fd;
+    unsigned long long mount_id;
+    unsigned depth;
+} initramfs_dir_t;
+
+/* 清理被覆盖的旧 initramfs，跳过挂载点和符号链接目标。 */
+static void remove_initramfs_entry(const char *name, unsigned char type, void *opaque)
 {
-    /* 绑定 /proc /sys /dev 进新根并 pivot */
-    if (sys_mount("proc", NEWROOT "/proc", "proc", 0, 0) != 0)
-        elog_err("boot: warning: mount proc failed");
-    if (sys_mount("sysfs", NEWROOT "/sys", "sysfs", 0, 0) != 0)
-        elog_err("boot: warning: mount sys failed");
-    if (sys_mount("devtmpfs", NEWROOT "/dev", "devtmpfs", 0, 0) != 0)
-        elog_err("boot: warning: mount dev failed");
+    (void)type;
+    initramfs_dir_t *parent = opaque;
+    if (aether_streq(name, ".") || aether_streq(name, "..")) return;
+    aether_statx_t st;
+    if (aether_statx(parent->fd, name, AT_SYMLINK_NOFOLLOW, STATX_TYPE | STATX_MNT_ID, &st) != 0 ||
+        !(st.stx_mask & STATX_MNT_ID) || st.stx_mnt_id != parent->mount_id)
+        return;
+    if ((st.stx_mode & 0170000) != 0040000) {
+        sys_unlinkat(parent->fd, name, 0);
+        return;
+    }
+    if (parent->depth == 64) return;
+    long fd = sys_openat(parent->fd, name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW, 0);
+    if (AETHER_IS_ERR(fd)) return;
+    if (aether_statx((int)fd, "", AT_EMPTY_PATH, STATX_MNT_ID, &st) == 0 &&
+        (st.stx_mask & STATX_MNT_ID) && st.stx_mnt_id == parent->mount_id) {
+        initramfs_dir_t child = { (int)fd, parent->mount_id, parent->depth + 1 };
+        aether_foreach_dirent_fd(child.fd, remove_initramfs_entry, &child);
+        sys_unlinkat(parent->fd, name, AT_REMOVEDIR);
+    }
+    sys_close((int)fd);
+}
 
-    sys_mkdirat(AT_FDCWD, NEWROOT "/" STASH, 0700);
+static int move_initramfs_root(void)
+{
+    /* 只为内核启动的 PID 1 覆盖旧 rootfs。普通救援 shell 不使用此回退。 */
+    if (sys_getpid() != 1 || (aether_is_mounted("/", "rootfs") != 1 &&
+                             aether_is_mounted("/", "ramfs") != 1 &&
+                             aether_is_mounted("/", "tmpfs") != 1))
+        return -1;
 
-    if (sys_chdir(NEWROOT) != 0) { elog_err("boot: chdir %s failed", NEWROOT); return -1; }
-    long r = sys_pivot_root(".", STASH);
-    if (AETHER_IS_ERR(r)) {
-        elog_err("boot: pivot_root failed (%d) -- initramfs needs kernel pivot_root support", AETHER_ERR_CODE(r));
-        sys_chdir("/");
+    long oldfd = sys_open("/", O_RDONLY | O_DIRECTORY | O_CLOEXEC, 0);
+    if (AETHER_IS_ERR(oldfd)) return -1;
+    aether_statx_t oldst, newst;
+    int reclaim = aether_statx((int)oldfd, "", AT_EMPTY_PATH, STATX_MNT_ID, &oldst) == 0 &&
+                  (oldst.stx_mask & STATX_MNT_ID) &&
+                  aether_statx(AT_FDCWD, ".", 0, STATX_TYPE, &newst) == 0 &&
+                  (oldst.stx_dev_major != newst.stx_dev_major || oldst.stx_dev_minor != newst.stx_dev_minor);
+    long r = sys_mount(".", "/", 0, MS_MOVE, 0);
+    if (r == 0) r = sys_chroot(".");
+    if (r == 0) r = sys_chdir("/");
+    if (r == 0 && reclaim) {
+        initramfs_dir_t oldroot = { (int)oldfd, oldst.stx_mnt_id, 0 };
+        aether_foreach_dirent_fd(oldroot.fd, remove_initramfs_entry, &oldroot);
+    } else if (r != 0) {
+        elog_err("boot: moving new root failed (%d)", AETHER_ERR_CODE(r));
+    }
+    sys_close((int)oldfd);
+    return r == 0 ? 0 : -1;
+}
+
+int aether_switch_root(const char *newroot)
+{
+    if (sys_chdir(newroot) != 0) {
+        elog_err("switch_root: chdir %s failed", newroot);
         return -1;
     }
-    /* 停掉后台 DELETE 监听：真正的 init 接管前恢复控制台（幂等） */
-    aether_del_watch_stop();
-    if (aether_del_pressed()) {
-        elog_info("boot: DELETE pressed at boot -- not execing init, entering rescue");
-        return -1;
+    /* 可用时把旧根叠在新根之上并卸载，无需在只读新根创建目录。 */
+    long r = sys_pivot_root(".", ".");
+    if (r == 0) {
+        r = sys_umount2(".", MNT_DETACH);
+        if (AETHER_IS_ERR(r)) elog_err("switch_root: detach old root failed (%d)", AETHER_ERR_CODE(r));
+        return sys_chdir("/") == 0 ? 0 : -1;
     }
+    /* 旧内核的初始 rootfs 无法 pivot_root。 */
+    if (r == -22 /* EINVAL */ && move_initramfs_root() == 0) return 0;
+    elog_err("switch_root: pivot_root failed (%d)", AETHER_ERR_CODE(r));
     sys_chdir("/");
-    sys_umount2("/" STASH, 2 /*MNT_DETACH*/);
-    sys_unlinkat(AT_FDCWD, STASH, 0x200 /*AT_REMOVEDIR*/);
+    return -1;
+}
 
+static int do_final_switch(const char *newroot)
+{
+    /* 先恢复控制台，再确认监听结束前是否收到 DELETE。 */
+    aether_del_watch_stop();
+    if (aether_del_pressed()) return -1;
+
+    if (sys_getpid() == 1 && sys_mount(0, "/", 0, MS_REC | MS_PRIVATE, 0) != 0) {
+        elog_err("boot: cannot make initramfs mounts private");
+        return -1;
+    }
+
+    /* 绑定已有伪文件系统，保留早期创建设备、UUID 链接和 efivarfs 等子挂载。 */
+    static const char *const mounts[] = { "/proc", "/sys", "/dev" };
+    for (size_t i = 0; i < sizeof(mounts) / sizeof(mounts[0]); i++) {
+        char path[520];
+        aether_path_join(path, sizeof(path), newroot, mounts[i] + 1);
+        if (sys_mount(mounts[i], path, 0, MS_BIND | MS_REC, 0) != 0)
+            elog_err("boot: warning: bind %s failed", mounts[i]);
+    }
+    return aether_switch_root(newroot);
+}
+
+static int switch_mounted_root(const char *newroot, const char *init)
+{
+    /* PID 1 可以切到普通目录上的 bind mount，但不允许把当前根再次切成根。 */
+    aether_statx_t previous, next;
+    if (aether_statx(AT_FDCWD, "/", 0, STATX_INO, &previous) != 0 ||
+        aether_statx(AT_FDCWD, newroot, 0, STATX_INO, &next) != 0 ||
+        (previous.stx_dev_major == next.stx_dev_major &&
+         previous.stx_dev_minor == next.stx_dev_minor && previous.stx_ino == next.stx_ino)) {
+        elog_err("switch_root: invalid new root %s", newroot);
+        return -1;
+    }
+    if (!aether_init_is_executable(newroot, init)) {
+        elog_err("switch_root: %s: init not executable in new root", init);
+        return -1;
+    }
+    if (sys_mount(newroot, newroot, 0, MS_BIND | MS_REC, 0) != 0) {
+        elog_err("switch_root: bind %s failed", newroot);
+        return -1;
+    }
+    prepare_rescue_boot();
+    if (do_final_switch(newroot) == 0) return exec_real_init(init);
+    sys_umount2(newroot, MNT_DETACH);
+    return -1;
+}
+
+static int exec_real_init(const char *init_path)
+{
     /* exec init：/sbin/init 或 init= */
     char *child_env[] = {
         (char *)"PATH=/sbin:/bin:/usr/sbin:/usr/bin",
@@ -1144,22 +1392,22 @@ static int do_final_switch(const char *init_path)
     return -1;
 }
 
-static int check_init_exists(const char *init)
+int aether_init_is_executable(const char *root, const char *init)
 {
-    /* init 路径必须在新根中存在（否则先失败，不 pivot） */
-    if (init[0] == '/') {
-        char p[256];
-        size_t d = 0;
-        const char *pre = NEWROOT;
-        for (size_t i = 0; pre[i] && d + 1 < sizeof(p); i++) p[d++] = pre[i];
-        for (size_t i = 0; init[i] && d + 1 < sizeof(p); i++) p[d++] = init[i];
-        p[d] = '\0';
-        long fd = sys_open(p, O_RDONLY, 0);
-        if (AETHER_IS_ERR(fd)) return -1;
-        sys_close((int)fd);
-        return 0;
+    long pid = sys_fork();
+    if (AETHER_IS_ERR(pid)) return 0;
+    if (pid == 0) {
+        if (sys_chroot(root) != 0 || sys_chdir("/") != 0) aether_exit(1);
+        aether_statx_t st;
+        if (aether_statx(AT_FDCWD, init, 0, STATX_TYPE, &st) != 0 ||
+            (st.stx_mode & 0170000) != 0100000)
+            aether_exit(1);
+        aether_exit(sys_faccessat(AT_FDCWD, init, 1 /* X_OK */, 0) == 0 ? 0 : 1);
     }
-    return -1;
+    int status = 0;
+    long r;
+    do { r = sys_wait4((int)pid, &status, 0, 0); } while (r == -4 /* EINTR */);
+    return r == pid && status == 0;
 }
 
 int aether_boot_attempt(const aether_cmdline_t *opts)
@@ -1167,31 +1415,28 @@ int aether_boot_attempt(const aether_cmdline_t *opts)
     char dev[64];
     /* 休眠恢复：必须在任何挂载动作之前触发（noresume 跳过；找不到镜像内核忽略） */
     try_hibernate_resume(opts);
-    if (aether_resolve_root(opts->root, dev, sizeof(dev)) != 0)
+    /* 设备路径和各类标识都要重新解析，驱动可能在开始解析后才注册设备。 */
+    int resolved = resolve_root(opts->root, dev, sizeof(dev), opts->rootwait);
+    if (opts->rootwait && resolved == -2) {
+        elog_info("boot: waiting for root=%s", opts->root);
+        for (int i = 0; i < 300 && resolved == -2; i++) {
+            if (aether_del_pressed()) {
+                elog_info("boot: DELETE pressed at boot -- aborting rootwait, entering rescue");
+                return -1;
+            }
+            struct { long sec; long nsec; } ts = { 0, 100L * 1000L * 1000L };
+            sys_nanosleep(&ts, 0);
+            resolved = resolve_root(opts->root, dev, sizeof(dev), 1);
+        }
+        if (resolved == 0) aether_populate_by_uuid();
+    }
+    if (resolved != 0 && (!opts->rootwait || aether_resolve_root(opts->root, dev, sizeof(dev)) != 0))
         return -1;
 
-    /* 等待设备出现（rootwait） */
-    int tries = opts->rootwait ? 300 : 20;
-    for (int i = 0;; i++) {
-        long fd = sys_open(dev, O_RDONLY, 0);
-        if (!AETHER_IS_ERR(fd)) { sys_close((int)fd); break; }
-        if (aether_del_pressed()) {
-            elog_info("boot: DELETE pressed at boot -- aborting rootwait, entering rescue");
-            return -1;
-        }
-        if (i >= tries) {
-            elog_err("boot: root device %s did not appear (rootwait timeout)", dev);
-            return -1;
-        }
-        struct { long sec; long nsec; } ts = { 0, 100UL * 1000UL * 1000UL }; /* 100ms */
-        sys_nanosleep(&ts, 0);
-    }
-
-    /* 挂载 /newroot：ro 作为挂载标志，其余 rootflags 原样透传（btrfs subvol=@ 等） */
     sys_mkdirat(AT_FDCWD, NEWROOT, 0755);
     unsigned long flags = opts->ro ? MS_RDONLY : 0;
-    if (opts->rootflags[0]) flags |= (unsigned long)ro_flag_of(opts->rootflags);
-    const char *mount_data = opts->rootflags[0] ? opts->rootflags : "";
+    char mount_data[sizeof(opts->rootflags)];
+    root_mount_data(opts->rootflags, mount_data);
 
     int mounted = 0;
     if (opts->rootfstype[0]) {
@@ -1208,16 +1453,14 @@ int aether_boot_attempt(const aether_cmdline_t *opts)
     if (!mounted) return -1;
 
     /* 提前确认 init 存在 */
-    if (check_init_exists(opts->init) != 0) {
-        elog_err("boot: init not found in new root (%s)", opts->init);
-        return -1;
+    if (opts->init[0] != '/' || !aether_init_is_executable(NEWROOT, opts->init)) {
+        elog_err("boot: init not executable in new root (%s)", opts->init);
+    } else if (!aether_del_pressed() && do_final_switch(NEWROOT) == 0) {
+        return exec_real_init(opts->init);
     }
-
-    /* boot_attempt 收尾检查：DEL 后不 exec（监听仍在，但下一处理会更精确） */
-    if (aether_del_pressed()) return -1;
-
-    if (do_final_switch(opts->init) != 0) return -1;
-    return 0; /* 不可达（exec 成功不返回） */
+    /* 切根前的失败可重试，卸载本次挂载的根和其子挂载。 */
+    sys_umount2(NEWROOT, MNT_DETACH);
+    return -1;
 }
 
 /* =============== 后台 DELETE 监听（PID 1 直到 exec 真正 init 前） =============
@@ -1242,7 +1485,6 @@ int aether_boot_attempt(const aether_cmdline_t *opts)
  *      KEY_BACKSPACE(14) 的按下事件
  *   B  console raw（串口 ttyS0 / VT）：0x7f 与 ESC[3~
  */
-static volatile int g_del_rescue = 0;
 static long g_del_watcher = -1;      /* >0 = watcher 子进程 pid */
 static volatile int g_del_child_stop = 0;
 
@@ -1411,7 +1653,7 @@ static void aether_del_watch_stop(void)
     g_del_watcher = -1;
     sys_kill((int)pid, SIGTERM);
     int st = 0;
-    sys_wait4((int)pid, &st, 0, 0);
+    while (sys_wait4((int)pid, &st, 0, 0) == -4 /* EINTR */) {}
 }
 
 /* PID 1 检查点：DEL 已按下 → 停监听并进救援（rescue_consoles 内部会停掉
@@ -1438,6 +1680,10 @@ int aether_init_main(char **envp)
 {
     (void)envp;
     /* 1. 挂载 proc/sys/dev（尽快拿到 /dev/ttyS0 等控制台，以便随后探测按键） */
+    sys_mkdirat(AT_FDCWD, "/proc", 0755);
+    sys_mkdirat(AT_FDCWD, "/sys", 0755);
+    sys_mkdirat(AT_FDCWD, "/dev", 0755);
+    sys_mkdirat(AT_FDCWD, "/etc", 0755);
     sys_mount("proc", "/proc", "proc", 0, 0);
     sys_mount("sysfs", "/sys", "sysfs", 0, 0);
     sys_mount("devtmpfs", "/dev", "devtmpfs", 0, 0);
@@ -1456,6 +1702,7 @@ int aether_init_main(char **envp)
 
     /* 1.5 按依赖加载镜像内模块（对应引用 mkinitcpio 的 udev 钩子） */
     aether_load_modules();
+    g_modules_loaded = 1;
 
     /* 1.8 DELETE 检查点 2：模块加载期间按键即进 rescue */
     if (aether_del_rescue_hit()) return 0; /* 不可达 */
@@ -1561,6 +1808,7 @@ int aether_cmd_rescue_boot(int argc, char **argv, char **envp)
         }
         elog_info("rescue-boot: retrying boot (root=%s)...", opts.root[0] ? opts.root : "(not set)");
     }
+    if (sys_getpid() == 1) prepare_rescue_boot();
     if (aether_boot_attempt(&opts) == 0) return 0; /* 不会到这里 */
     elog_err("rescue-boot: boot failed");
     return 1;

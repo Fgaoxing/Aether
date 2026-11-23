@@ -4,6 +4,8 @@ pty_test.py — 端到端交互冒烟：在 pty 里跑 aether，发送命令并�
 用法：python3 tools/pty_test.py ./build-nolibc/aether
 """
 import os, pty, sys, time, select
+import shlex
+import tempfile
 
 cmd = sys.argv[1:]
 if not cmd:
@@ -14,10 +16,14 @@ if pid == 0:
     os.execv(cmd[0], cmd)
 
 out = b""
+tmpdir = tempfile.TemporaryDirectory(prefix="aether-pty-")
+source = shlex.quote(os.path.join(tmpdir.name, "source"))
+target = shlex.quote(os.path.join(tmpdir.name, "target"))
 timeline = [
     (0.0, b"echo pty-works\n"),
-    (0.8, b"echo a | cat > /tmp/aether_pty_check.txt\n"),
-    (1.6, b"cat /tmp/aether_pty_check.txt\n"),
+    (0.8, f"echo pipeline-ok | cat > {source}\n".encode()),
+    (1.2, f"mv {source} {target}\n".encode()),
+    (1.6, f"cat {target}\n".encode()),
     (2.4, b"\x03"),                 # Ctrl-C：shell 必须活着
     (3.2, b"echo still-alive\n"),
     (4.0, b"exit\n"),
@@ -58,6 +64,8 @@ while time.time() < deadline:
 text = out.decode("utf-8", "replace")
 print(text)
 # 注意 OPOST 把 \n 变成 \r\n，检查子串时按终端实际输出
-ok = all(s in text for s in ("pty-works", "still-alive", "aether /"))
+lines = text.splitlines()
+ok = all(s in lines for s in ("pty-works", "pipeline-ok", "still-alive")) and "aether /" in text
+tmpdir.cleanup()
 print("RC:", child_status, "PASS" if ok else "FAIL")
 sys.exit(0 if ok and child_status == 0 else 1)

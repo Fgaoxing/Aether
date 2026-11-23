@@ -13,6 +13,8 @@ int aether_read_file(const char *path, void *buf, size_t cap, size_t *len_out);
 /* 目录项枚举；name/type 通过 cb 回调；0 成功，-1 失败（无法打开目录） */
 typedef void (*aether_dirent_cb)(const char *name, unsigned char d_type, void *ctx);
 int aether_foreach_dirent(const char *dirpath, aether_dirent_cb cb, void *ctx);
+/* 从已打开的目录读取，保留调用方的 fd 所有权。 */
+int aether_foreach_dirent_fd(int fd, aether_dirent_cb cb, void *ctx);
 
 /* /proc/mounts 中找某挂载点（fstype 可为 NULL=任意）：1=已挂载，0=未挂载，-1=读失败 */
 int aether_is_mounted(const char *target, const char *fstype);
