@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include "argparse.h"
+#include "boot.h"
 #include "mem.h"
 
 static int failures, checks;
@@ -158,6 +159,17 @@ int main(void)
     /* 用例 12：未注册的查询返回 -1 / 0 */
     CHECK(aether_opt_count(opts, nopts, 'q') == -1);
     CHECK(aether_opt_value(opts, nopts, 'q') == 0);
+
+    /* 内核命令行可包含带空格的分区标签以及换行。 */
+    {
+        aether_cmdline_t out;
+        CHECK(aether_parse_cmdline("root=\"PARTLABEL=Linux root\"\r\n"
+                                   "rootflags=ro,errors=remount-ro rootwait noresume", &out) == 0);
+        CHECK(strcmp(out.root, "PARTLABEL=Linux root") == 0);
+        CHECK(strcmp(out.rootflags, "ro,errors=remount-ro") == 0);
+        CHECK(out.ro && out.rootwait && out.noresume);
+        CHECK(strcmp(out.init, "/sbin/init") == 0);
+    }
 
     mem_arena_destroy(arena);
 

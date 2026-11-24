@@ -39,21 +39,25 @@ int aether_foreach_dirent(const char *dirpath, aether_dirent_cb cb, void *ctx)
 {
     long fd = sys_open(dirpath, O_RDONLY | O_DIRECTORY, 0);
     if (AETHER_IS_ERR(fd)) return -1;
+    int r = aether_foreach_dirent_fd((int)fd, cb, ctx);
+    sys_close((int)fd);
+    return r;
+}
+
+int aether_foreach_dirent_fd(int fd, aether_dirent_cb cb, void *ctx)
+{
     char buf[4096];
     long n;
-    int fails = 0;
-    while ((n = sys_getdents64((int)fd, buf, sizeof(buf))) > 0) {
+    while ((n = sys_getdents64(fd, buf, sizeof(buf))) > 0) {
         long off = 0;
         while (off < n) {
             aether_dirent_t *d = (aether_dirent_t *)(buf + off);
-            if (d->d_reclen == 0) { fails = -1; goto out; } /* 防御损坏数据 */
+            if (d->d_reclen == 0) return -1; /* 防御损坏数据 */
             cb(d->d_name, d->d_type, ctx);
             off += d->d_reclen;
         }
     }
-out:
-    sys_close((int)fd);
-    return fails;
+    return n == 0 ? 0 : -1;
 }
 
 /* /proc/mounts 逐行解析：device target fstype opts ... → fields[1]==target && (fstype==0 || fields[2]==fstype) */

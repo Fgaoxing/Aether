@@ -2,7 +2,7 @@
  * modload.c — PID 1 早期按序 finit_module 加载镜像内模块
  * 对应 mkinitcpio 的 udev 钩子（自动按依赖加载 MODULES）。
  * 模块列表：/etc/aether/modules.order（每行一个模块路径，可带 # 注释）
- * 模块文件名保持内核包里的原样（.ko.zst 由 CONFIG_MODULE_DECOMPRESS=y 解压）。
+ * 模块文件名保持内核包里的原样（压缩模块由 CONFIG_MODULE_DECOMPRESS=y 解压）。
  * 任何一步失败只报错不致命（rescue 环境可能没有对应硬件）。
  */
 #include <stddef.h>
@@ -30,7 +30,7 @@ static int module_flags_of(long fd)
 }
 
 /* 无 /etc/aether/modules.order 时的兜底：
- * 多遍扫描 /lib/modules 下所有 *.ko / *.ko.zst，每遍尝试全部未加载模块，
+ * 多遍扫描 /lib/modules 下所有 *.ko / *.ko.{gz,xz,zst}，每遍尝试全部未加载模块，
  * 直到某一遍零成功。依赖顺序由多遍自然满足（依赖先于其使用者成功）。 */
 #define MODULE_MAX 256
 static char g_module_paths[MODULE_MAX][256];
@@ -61,10 +61,12 @@ static void collect_cb(const char *name, unsigned char d_type, void *vctx)
             return;
         return;
     }
-    /* 普通文件：*.ko 或 *.ko.zst（.ko.zst 魔数判定在 finit 前由 module_flags_of 完成） */
+    /* 保留模块原格式，由目标内核处理匹配的压缩算法。 */
     size_t len = aether_strlen(full);
-    int is_ko = (len >= 3 && aether_strncmp(full + len - 3, ".ko", 3) == 0)
-             || (len >= 7 && aether_strncmp(full + len - 7, ".ko.zst", 7) == 0);
+    int is_ko = (len >= 6 && (aether_streq(full + len - 6, ".ko.gz") ||
+                              aether_streq(full + len - 6, ".ko.xz")))
+             || (len >= 3 && aether_streq(full + len - 3, ".ko"))
+             || (len >= 7 && aether_streq(full + len - 7, ".ko.zst"));
     if (is_ko && g_module_n < MODULE_MAX) {
         size_t j = 0;
         while (full[j] && j + 1 < sizeof(g_module_paths[g_module_n])) { g_module_paths[g_module_n][j] = full[j]; j++; }
@@ -85,6 +87,7 @@ static void collect_modules(const char *dir)
 
 static int fallback_load(void)
 {
+    g_module_n = 0;
     collect_modules("/lib/modules");
     if (g_module_n == 0) { elog_info("modload: no module files found under /lib/modules"); return 0; }
 
@@ -129,9 +132,10 @@ static int fallback_load(void)
         }
         for (int j = 0; j < nproc; j++) {
             int st = 0;
-            long r = sys_wait4((int)pass_pids[j], &st, 0, 0);
+            long r;
+            do { r = sys_wait4((int)pass_pids[j], &st, 0, 0); } while (r == -4 /* EINTR */);
             int code = 44;
-            if (!AETHER_IS_ERR(r)) code = (st >> 8) & 0xff;
+            if (r > 0 && (st & 0x7f) == 0) code = (st >> 8) & 0xff;
             if (code == 0 || code == 42) { done[pass_idx[j]] = 1; loaded_pass++; }
         }
         loaded_total += loaded_pass;

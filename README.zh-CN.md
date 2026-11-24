@@ -3,19 +3,19 @@
 [![build](https://github.com/Fgaoxing/Aether/actions/workflows/build.yml/badge.svg)](https://github.com/Fgaoxing/Aether/actions/workflows/build.yml)
 [English](README.md)
 
-**aether** 是一个 BusyBox 风格的 Linux initramfs 救援工具箱：单一静态二进制，通过 `argv[0]` 分派多个 applet。它既可作为交互式 shell 使用，主要用途是作为 initramfs 中的 **PID 1**：挂载 `/proc`/`/sys`/`/dev`、加载模块、解析内核命令行、解析并挂载 root、`pivot_root`，最后 `execve` 真正的 init。任何失败都会进入交互式救援 shell，而不是 kernel panic。
+**aether** 是一个 BusyBox 风格的 Linux initramfs 救援工具箱：单一静态二进制，通过 `argv[0]` 分派多个 applet。它既可作为交互式 shell 使用，主要用途是作为 initramfs 中的 **PID 1**：挂载 `/proc`/`/sys`/`/dev`、加载模块、解析内核命令行、解析并挂载并切换根文件系统，最后 `execve` 真正的 init。任何失败都会进入交互式救援 shell，而不是 kernel panic。
 
 ## 特点
 
 - **小而静态**：纯 C，无 C++/ncurses/readline/pthreads；静态 `-Os` 构建；nolibc 变体不依赖 libc。
 - **双构建**：host libc 用于开发/测试，nolibc 用于 initramfs 部署。
-- **完整 PID 1 启动链**：模块加载、uevent 泵、root 解析、休眠恢复、`pivot_root`、`execve`。
+- **完整 PID 1 启动链**：模块加载、uevent 泵、root 解析、休眠恢复、切根、`execve`。
 - **救援优先**：启动失败进入可用 shell；`exit`/`rescue-boot` 由 PID 1 重试启动。
 - **确定性进入救援**：cmdline 加 `aether_rescue`，或启动时按 `DELETE`（后台监视，零启动开销）。
 - **救援网络**：自动 DHCP + telnetd（`0.0.0.0:23`，无认证明文，仅限可信网络），也可手动 `netup`/`ifconfig`/`udhcpc`。
 - **休眠恢复**：构建镜像时从 `/etc/fstab` 自动检测 swap；无需 cmdline `resume=`。
 
-> **状态**：x86_64 已在 QEMU 端到端验证（启动、救援、DELETE 进入救援、DHCP/telnetd、休眠恢复）。i386 已验证。arm/aarch64/riscv64/loongarch64 仅构建。见 [验证状态](#验证状态)。
+> **状态**：x86_64 已在 QEMU 端到端验证（启动、救援、DELETE 进入救援、DHCP/telnetd、休眠恢复）。i386 已验证。riscv64 已用 Debian Linux 6.12 和 7.3 在 QEMU 验证启动和救援。见 [验证状态](#验证状态)。
 
 ## 快速开始
 
@@ -134,7 +134,7 @@ AUR 模板在 `packaging/aur/`：`aether-rescue-git` 和 `aether-rescue-bin`。
 - resume 支持 `resume=/dev`、`PARTUUID=`、`PARTLABEL=`、`UUID=`（含休眠态 `S1SUSPEND`）和 major:minor；不支持 `LABEL=`，不自动激活 dm-crypt/LVM。
 - EFI/NVRAM 写入请先在牺牲用 VM 验证。
 - `lsblk` 不展开 btrfs 子卷。
-- arm/aarch64/riscv64/loongarch64 运行时未测试。
+- arm/aarch64/loongarch64 整机运行待验证。
 
 ## 验证状态
 
@@ -149,7 +149,14 @@ AUR 模板在 `packaging/aur/`：`aether-rescue-git` 和 `aether-rescue-bin`。
 - 无 udev 填充 `/dev/disk/by-uuid`。
 - `zcat` 与官方 zstd/gzip 字节级一致；`grep` 与 GNU grep 对比 31 个模式。
 
-未验证：arm/aarch64/riscv64/loongarch64 运行时；真机休眠往返；真机 EFI/NVRAM 写入；dm-crypt/LVM resume；物理 VT USB HID DELETE。
+riscv64 已在 QEMU 上用 Debian Linux 6.12 和 7.3 验证以下用例。
+
+- libc 和静态构建、CTest、交互 shell 冒烟测试。
+- 读写及只读 ext4 启动、UUID/LABEL 和 GPT PARTUUID/PARTLABEL 查找。
+- 串口救援与重试、使用 Debian `.ko.xz` 模块的 VirtIO 磁盘、VirtIO 网卡 DHCP。
+- 模块扫描接受 `.ko`、`.ko.gz`、`.ko.xz` 和 `.ko.zst`，压缩模块依赖目标内核提供对应解压支持。
+
+待验证的环境与功能包括 arm/aarch64/loongarch64 整机运行，以及 riscv64 开发板启动、UEFI 和休眠往返。真机 EFI/NVRAM 写入、dm-crypt/LVM 休眠恢复和 USB 键盘触发救援也待验证。
 
 ## 仓库结构
 

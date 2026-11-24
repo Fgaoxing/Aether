@@ -72,12 +72,21 @@
   #define O_WRONLY   01
   #define O_RDWR     02
   #define O_CREAT    0100
+  #define O_EXCL     0200
   #define O_TRUNC    01000
   #define O_APPEND   02000
   #define O_NONBLOCK 04000
+  #if defined(__arm__) || defined(__aarch64__)
+  #define O_DIRECTORY 040000
+  #define O_NOFOLLOW 0100000
+  #else
   #define O_DIRECTORY 0200000
+  #define O_NOFOLLOW 0400000
+  #endif
   #define O_CLOEXEC  02000000
   #define O_NOCTTY   0400
+  #define F_GETFL    3
+  #define F_SETFL    4
   #define PROT_READ  1
   #define PROT_WRITE 2
   #define PROT_EXEC  4
@@ -92,6 +101,9 @@
 
 #ifndef AT_FDCWD
 #define AT_FDCWD (-100) /* libc 分支也统一补一个，封装层直用 */
+#endif
+#ifndef AT_EMPTY_PATH
+#define AT_EMPTY_PATH 0x1000
 #endif
 #ifndef AT_REMOVEDIR
 #define AT_REMOVEDIR 0x200
@@ -109,13 +121,8 @@
 #define SIGTERM 15
 #define SIGWINCH 28
 #define SIGTSTP  20
-/* SIGUSR1：x86_64/i386/arm=10，aarch64/riscv64/loongarch64（asm-generic）=16 */
 #ifndef SIGUSR1
-#if defined(__x86_64__) || defined(__i386__) || defined(__arm__)
 #define SIGUSR1 10
-#else
-#define SIGUSR1 16
-#endif
 #endif
 #ifndef SIGTTIN
 #define SIGTTIN 21
@@ -128,13 +135,16 @@
 #define SIG_IGN ((void (*)(int))1)
 #endif
 #define MS_RDONLY   0x00001
-#define MS_NOSUID   0x00008
+#define MS_NOSUID   0x00002
 #define MS_NODEV    0x00004
-#define MS_NOEXEC   0x00002
+#define MS_NOEXEC   0x00008
 #define MS_NOATIME  0x00400
 #define MS_REMOUNT  0x00020
 #define MS_BIND     0x01000
+#define MS_MOVE     0x02000
 #define MS_REC      0x04000
+#define MS_PRIVATE  0x40000
+#define MNT_DETACH  2
 #define MS_I_SYNCHRONOUS 0x00010 /* MS_SYNCHRONOUS，未用，保留给将来 */
 
 /* raw syscall 返回值判负：内核只把 -4095..-1 当作 errno */
@@ -171,7 +181,9 @@ long sys_getppid(void);
 long sys_read(int fd, void *buf, size_t count);
 long sys_write(int fd, const void *buf, size_t count);
 long sys_open(const char *path, int flags, int mode); /* 无 open 的架构归一为 openat(AT_FDCWD,...)（§5.1） */
+long sys_openat(int dirfd, const char *path, int flags, int mode);
 long sys_close(int fd);
+long sys_fcntl(int fd, int cmd, long arg);
 long sys_lseek(int fd, long offset, int whence);      /* i386 为 32 位偏移，>2GB 文件不支持 */
 long sys_unlinkat(int dirfd, const char *path, int flags);
 long sys_unlink(const char *path);                    /* unlinkat(AT_FDCWD, path, 0) 归一 */

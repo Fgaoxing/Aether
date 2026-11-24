@@ -64,7 +64,7 @@
 #define __NR_swapon          224
 #define __NR_swapoff         225
 #define __NR_utimensat       88
-#define __NR_renameat        38
+#define __NR_renameat2       276
 #define __NR_ftruncate       46
 #define __NR_truncate        45
 #define __NR_fsync           82

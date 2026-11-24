@@ -3,6 +3,11 @@
     .globl _start
     .type _start, @function
 _start:
+    /* 链接器可能将全局数据访问松弛成 gp 相对寻址。 */
+    .option push
+    .option norelax
+    la      gp, __global_pointer$
+    .option pop
     li      x8, 0               /* 终止回溯 */
     ld      a0, 0(sp)           /* argc */
     addi    a1, sp, 8           /* argv */
